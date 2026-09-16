@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>phototagger</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<section id="start-view" class="view">
+  <h1>phototagger</h1>
+  <div id="start-summary">Scanning…</div>
+  <fieldset id="layout-choice">
+    <legend>tagged/ layout</legend>
+    <label><input type="radio" name="layout" value="flat" checked> Flat</label>
+    <label><input type="radio" name="layout" value="nested"> Mirror source subfolders</label>
+  </fieldset>
+  <button id="start-button" disabled>Start tagging</button>
+</section>
+
+<section id="tag-view" class="view" hidden>
+  <header id="tag-header">
+    <span id="tag-progress"></span>
+    <span id="tag-relpath"></span>
+  </header>
+
+  <div id="tag-body">
+    <div id="preview-pane">
+      <img id="preview-img" alt="current photo preview">
+    </div>
+
+    <form id="tag-form">
+      <fieldset data-group="location">
+        <legend>Location &amp; altitude
+          <button type="button" class="same-as-prev" data-group="location">↩ same as previous</button>
+        </legend>
+        <label>Favourite
+          <select id="favourite-select">
+            <option value="">— freehand pin —</option>
+          </select>
+        </label>
+        <div id="map"></div>
+        <label>Altitude (m) <input type="number" step="any" id="altitude-input"></label>
+        <div id="save-favourite-row">
+          <input type="text" id="favourite-name-input" placeholder="Name this location…">
+          <button type="button" id="save-favourite-button">Save current pin as favourite</button>
+        </div>
+      </fieldset>
+
+      <fieldset data-group="dateTime">
+        <legend>Date &amp; time
+          <button type="button" class="same-as-prev" data-group="dateTime">↩ same as previous</button>
+        </legend>
+        <label>Date/time <input type="datetime-local" id="datetime-input" step="1"></label>
+        <label>UTC offset <input type="text" id="offset-input" placeholder="+01:00"></label>
+        <span id="offset-status"></span>
+      </fieldset>
+
+      <fieldset data-group="keywords">
+        <legend>Keywords
+          <button type="button" class="same-as-prev" data-group="keywords">↩ same as previous</button>
+        </legend>
+        <label>Comma-separated <input type="text" id="keywords-input"></label>
+      </fieldset>
+
+      <fieldset data-group="caption">
+        <legend>Caption
+          <button type="button" class="same-as-prev" data-group="caption">↩ same as previous</button>
+        </legend>
+        <label><textarea id="caption-input" rows="2"></textarea></label>
+      </fieldset>
+    </form>
+  </div>
+
+  <footer id="tag-controls">
+    <button id="prev-button" type="button">← Prev</button>
+    <button id="skip-button" type="button">Skip →</button>
+    <button id="apply-button" type="button">Apply &amp; Next ✓</button>
+  </footer>
+</section>
+
+<section id="done-view" class="view" hidden>
+  <h1>All done</h1>
+  <p>Every photo has been tagged and moved into <code id="done-tagged-dir"></code>.</p>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

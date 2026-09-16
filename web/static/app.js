@@ -1,0 +1,332 @@
+'use strict';
+
+let map, marker;
+let favourites = [];
+let previousData = {};
+let selectedFavouriteName = '';
+let offsetManuallyEdited = false;
+let settingProgrammatically = false;
+let taggedDirName = '';
+let touched = { location: false, dateTime: false, keywords: false, caption: false };
+
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function switchView(name) {
+  $('start-view').hidden = name !== 'start';
+  $('tag-view').hidden = name !== 'tag';
+  $('done-view').hidden = name !== 'done';
+  if (name === 'done') $('done-tagged-dir').textContent = taggedDirName;
+}
+
+// ---- Start screen ----
+
+async function loadState() {
+  const res = await fetch('/api/state');
+  const data = await res.json();
+  taggedDirName = data.taggedDir;
+
+  const extLine = Object.entries(data.extCounts).map(([ext, count]) => `${count} .${ext}`).join(', ') || 'none';
+  let html = `<p><strong>${data.photoCount}</strong> photo(s) found in <code>${escapeHtml(data.sourceDir)}</code> ` +
+    `across <strong>${data.subfolderCount}</strong> subfolder(s): ${extLine}.</p>`;
+  html += `<p>Backup: <code>${escapeHtml(data.backupDir)}</code> &nbsp; Tagged output: <code>${escapeHtml(data.taggedDir)}</code></p>`;
+  if (data.skipped && data.skipped.length) {
+    html += `<details><summary>${data.skipped.length} skipped/non-applicable file(s)</summary>` +
+      `<ul id="skipped-list">${data.skipped.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul></details>`;
+  }
+  $('start-summary').innerHTML = html;
+  $('start-button').disabled = data.photoCount === 0;
+}
+
+$('start-button').addEventListener('click', async () => {
+  const flat = document.querySelector('input[name=layout]:checked').value === 'flat';
+  await fetch('/api/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flatLayout: flat }) });
+  switchView('tag');
+  initMap();
+  await loadFavourites();
+  const res = await fetch('/api/photo/current');
+  renderCurrent(await res.json());
+});
+
+// ---- Map ----
+
+function initMap() {
+  map = L.map('map').setView([53.35, -6.26], 6);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
+  map.on('click', (e) => {
+    if (settingProgrammatically) return;
+    setMarker(e.latlng.lat, e.latlng.lng);
+    onManualPin(e.latlng.lat, e.latlng.lng);
+  });
+}
+
+function setMarker(lat, lon) {
+  if (marker) {
+    marker.setLatLng([lat, lon]);
+  } else {
+    marker = L.marker([lat, lon], { draggable: true }).addTo(map);
+    marker.on('dragend', () => {
+      if (settingProgrammatically) return;
+      const ll = marker.getLatLng();
+      onManualPin(ll.lat, ll.lng);
+    });
+  }
+  map.setView([lat, lon], Math.max(map.getZoom(), 12));
+}
+
+function clearMarker() {
+  if (marker) {
+    map.removeLayer(marker);
+    marker = null;
+  }
+}
+
+function onManualPin(lat, lon) {
+  touched.location = true;
+  selectedFavouriteName = '';
+  offsetManuallyEdited = false;
+  $('favourite-select').value = '';
+  fetchElevation(lat, lon);
+  maybeResolveTimezone();
+}
+
+async function fetchElevation(lat, lon) {
+  try {
+    const res = await fetch('/api/elevation', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lon }),
+    });
+    const data = await res.json();
+    if (data.ok) $('altitude-input').value = data.alt;
+  } catch (e) {
+    // Offline or unreachable: leave altitude as-is rather than blocking.
+  }
+}
+
+async function maybeResolveTimezone() {
+  if (!marker || offsetManuallyEdited) return;
+  const dtVal = $('datetime-input').value;
+  if (!dtVal) return;
+  const ll = marker.getLatLng();
+  const offsetInput = $('offset-input');
+  try {
+    const res = await fetch('/api/timezone', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: ll.lat, lon: ll.lng, dateTime: dtVal }),
+    });
+    const data = await res.json();
+    if (data.ok) {
+      offsetInput.value = data.offset;
+      offsetInput.required = false;
+      offsetInput.classList.remove('required-missing');
+    } else {
+      offsetInput.required = true;
+      offsetInput.classList.add('required-missing');
+    }
+  } catch (e) {
+    // Offline: leave the offset field as-is (still editable manually).
+  }
+}
+
+// ---- Favourites ----
+
+async function loadFavourites() {
+  const res = await fetch('/api/favourites');
+  favourites = await res.json();
+  populateFavouriteSelect();
+}
+
+function populateFavouriteSelect() {
+  const sel = $('favourite-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">— freehand pin —</option>' +
+    favourites.map((f) => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.name)}</option>`).join('');
+  sel.value = current;
+}
+
+$('favourite-select').addEventListener('change', (e) => {
+  const name = e.target.value;
+  if (!name) return;
+  const fav = favourites.find((f) => f.name === name);
+  if (!fav) return;
+  settingProgrammatically = true;
+  setMarker(fav.lat, fav.lon);
+  settingProgrammatically = false;
+  $('altitude-input').value = fav.alt;
+  touched.location = true;
+  selectedFavouriteName = fav.name;
+  offsetManuallyEdited = false;
+  maybeResolveTimezone();
+});
+
+$('save-favourite-button').addEventListener('click', async () => {
+  if (!marker) {
+    alert('Drop a pin on the map first.');
+    return;
+  }
+  const name = $('favourite-name-input').value.trim();
+  if (!name) {
+    alert('Enter a name for this location.');
+    return;
+  }
+  const ll = marker.getLatLng();
+  const alt = parseFloat($('altitude-input').value) || 0;
+  const res = await fetch('/api/favourites', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, lat: ll.lat, lon: ll.lng, alt }),
+  });
+  favourites = await res.json();
+  populateFavouriteSelect();
+  $('favourite-name-input').value = '';
+});
+
+// ---- Field touch tracking ----
+
+$('datetime-input').addEventListener('input', () => {
+  if (settingProgrammatically) return;
+  touched.dateTime = true;
+  offsetManuallyEdited = false;
+  maybeResolveTimezone();
+});
+
+$('offset-input').addEventListener('input', () => {
+  if (settingProgrammatically) return;
+  offsetManuallyEdited = true;
+  touched.dateTime = true;
+  $('offset-input').classList.remove('required-missing');
+});
+
+$('altitude-input').addEventListener('input', () => {
+  if (settingProgrammatically) return;
+  touched.location = true;
+});
+
+$('keywords-input').addEventListener('input', () => {
+  if (settingProgrammatically) return;
+  touched.keywords = true;
+});
+
+$('caption-input').addEventListener('input', () => {
+  if (settingProgrammatically) return;
+  touched.caption = true;
+});
+
+document.querySelectorAll('.same-as-prev').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const group = btn.dataset.group;
+    const prev = previousData[group];
+    if (!prev) return;
+
+    settingProgrammatically = true;
+    if (group === 'location') {
+      setMarker(prev.lat, prev.lon);
+      $('altitude-input').value = prev.alt ?? '';
+      selectedFavouriteName = prev.favouriteName || '';
+      $('favourite-select').value = selectedFavouriteName;
+    } else if (group === 'dateTime') {
+      $('datetime-input').value = prev.dateTime || '';
+      $('offset-input').value = prev.offset || '';
+      $('offset-input').classList.remove('required-missing');
+      offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
+    } else if (group === 'keywords') {
+      $('keywords-input').value = (prev.keywords || []).join(', ');
+    } else if (group === 'caption') {
+      $('caption-input').value = prev.caption || '';
+    }
+    settingProgrammatically = false;
+
+    touched[group] = true;
+  });
+});
+
+// ---- Tagging queue ----
+
+function parseKeywords(text) {
+  return text.split(',').map((s) => s.trim()).filter(Boolean);
+}
+
+function renderCurrent(data) {
+  if (data.done) {
+    switchView('done');
+    return;
+  }
+
+  $('tag-progress').textContent = `${data.index + 1} / ${data.total}`;
+  $('tag-relpath').textContent = data.relPath;
+  $('preview-img').src = `${data.previewUrl}?i=${data.index}&t=${Date.now()}`;
+
+  touched = { location: false, dateTime: false, keywords: false, caption: false };
+  offsetManuallyEdited = false;
+  selectedFavouriteName = '';
+  previousData = data.previous || {};
+
+  settingProgrammatically = true;
+  const ex = data.existing || {};
+  $('datetime-input').value = ex.dateTime || '';
+  $('offset-input').value = ex.offset || '';
+  $('offset-input').classList.remove('required-missing');
+  if (ex.lat != null && ex.lon != null) {
+    setMarker(ex.lat, ex.lon);
+  } else {
+    clearMarker();
+  }
+  $('altitude-input').value = ex.alt ?? '';
+  $('favourite-select').value = '';
+  $('keywords-input').value = (ex.keywords || []).join(', ');
+  $('caption-input').value = ex.caption || '';
+  settingProgrammatically = false;
+
+  document.querySelectorAll('.same-as-prev').forEach((btn) => {
+    btn.disabled = !previousData[btn.dataset.group];
+  });
+}
+
+function buildApplyPayload() {
+  const lat = marker ? marker.getLatLng().lat : null;
+  const lon = marker ? marker.getLatLng().lng : null;
+  const altVal = $('altitude-input').value;
+
+  return {
+    dateTime: $('datetime-input').value,
+    dateTimeTouched: touched.dateTime,
+    offset: $('offset-input').value,
+    lat, lon,
+    alt: altVal === '' ? null : parseFloat(altVal),
+    locationTouched: touched.location,
+    favouriteName: selectedFavouriteName,
+    keywords: parseKeywords($('keywords-input').value),
+    keywordsTouched: touched.keywords,
+    caption: $('caption-input').value,
+    captionTouched: touched.caption,
+  };
+}
+
+$('skip-button').addEventListener('click', async () => {
+  const res = await fetch('/api/photo/skip', { method: 'POST' });
+  renderCurrent(await res.json());
+});
+
+$('prev-button').addEventListener('click', async () => {
+  const res = await fetch('/api/photo/prev', { method: 'POST' });
+  renderCurrent(await res.json());
+});
+
+$('apply-button').addEventListener('click', async () => {
+  const payload = buildApplyPayload();
+  const res = await fetch('/api/photo/apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    alert('Could not apply: ' + (err.error || res.statusText));
+    return;
+  }
+  renderCurrent(await res.json());
+});
+
+loadState();
