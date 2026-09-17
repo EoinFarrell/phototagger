@@ -99,6 +99,7 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath string) error {
 		return fmt.Errorf("loading %s: %w", locationsPath, err)
 	}
 
+	log.Printf("reading existing dates for %d photo(s) to establish tagging order...", len(scanResult.Photos))
 	sess, err := server.NewSession(
 		absSource, backupDir, taggedDir,
 		true, // flat tagged/ layout by default; changeable on the start screen

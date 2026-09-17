@@ -25,7 +25,7 @@ const dateTimeLayout = "2006-01-02T15:04:05"
 
 // ExifClient is the subset of *exiftool.Client the session needs.
 type ExifClient interface {
-	ReadDateTimeOriginal(path string) (time.Time, bool, error)
+	ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time, error)
 	ReadExisting(path string) (exiftool.Existing, error)
 	WriteFields(path string, f exiftool.Fields) error
 	ExtractPreview(path string) ([]byte, error)
@@ -95,14 +95,15 @@ func NewSession(
 	elevation Elevation,
 	locs *locations.Store,
 ) (*Session, error) {
+	dates, err := readDatesInBatches(exif, scanResult.Photos)
+	if err != nil {
+		return nil, err
+	}
+
 	entries := make([]queue.Entry, 0, len(scanResult.Photos))
 	for _, p := range scanResult.Photos {
-		dt, ok, err := exif.ReadDateTimeOriginal(p.Path)
-		if err != nil {
-			return nil, fmt.Errorf("reading date for %s: %w", p.RelPath, err)
-		}
 		entry := queue.Entry{Photo: p}
-		if ok {
+		if dt, ok := dates[p.Path]; ok {
 			entry.DateTimeOriginal = &dt
 		}
 		entries = append(entries, entry)
@@ -122,6 +123,38 @@ func NewSession(
 		elevation:  elevation,
 		locations:  locs,
 	}, nil
+}
+
+// dateReadBatchSize caps how many paths go into a single exiftool
+// invocation when establishing queue order. exiftool's command line can
+// handle far more than this, but chunking keeps any one invocation's JSON
+// response a reasonable size.
+const dateReadBatchSize = 200
+
+// readDatesInBatches reads every photo's existing DateTimeOriginal via a
+// small number of batched exiftool invocations rather than one per photo --
+// exiftool is a Perl script, so per-invocation startup overhead dominates
+// for hundreds of small reads.
+func readDatesInBatches(exif ExifClient, photos []scan.Photo) (map[string]time.Time, error) {
+	dates := make(map[string]time.Time, len(photos))
+	for start := 0; start < len(photos); start += dateReadBatchSize {
+		end := start + dateReadBatchSize
+		if end > len(photos) {
+			end = len(photos)
+		}
+		paths := make([]string, end-start)
+		for i, p := range photos[start:end] {
+			paths[i] = p.Path
+		}
+		batch, err := exif.ReadDateTimeOriginalBatch(paths)
+		if err != nil {
+			return nil, fmt.Errorf("reading dates for photos %d-%d: %w", start, end, err)
+		}
+		for path, dt := range batch {
+			dates[path] = dt
+		}
+	}
+	return dates, nil
 }
 
 // Total returns the number of photos found by the initial scan.

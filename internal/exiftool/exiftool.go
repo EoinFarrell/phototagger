@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -53,24 +52,43 @@ func NewWithRunner(r Runner) *Client {
 	return &Client{runner: r}
 }
 
-// ReadDateTimeOriginal reads a photo's existing DateTimeOriginal tag, used
-// for queue ordering. ok is false if the tag isn't present.
-func (c *Client) ReadDateTimeOriginal(path string) (dt time.Time, ok bool, err error) {
-	out, err := c.runner.Output("-DateTimeOriginal", "-d", dateLayout, "-s3", path)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("reading DateTimeOriginal from %s: %w", path, err)
+// ReadDateTimeOriginalBatch reads the existing DateTimeOriginal tag for many
+// photos in a single exiftool invocation, used to establish queue order at
+// startup. exiftool is a Perl script, so process-launch overhead dominates
+// for many small reads -- one invocation covering every path is dramatically
+// faster than one invocation per photo. The returned map contains an entry
+// only for paths that have the tag; a missing entry means it wasn't present.
+func (c *Client) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time, error) {
+	dates := make(map[string]time.Time, len(paths))
+	if len(paths) == 0 {
+		return dates, nil
 	}
 
-	text := strings.TrimSpace(string(out))
-	if text == "" || text == "-" {
-		return time.Time{}, false, nil
+	args := append([]string{"-j", "-DateTimeOriginal"}, paths...)
+	out, err := c.runner.Output(args...)
+	if err != nil {
+		return nil, fmt.Errorf("reading DateTimeOriginal for %d photo(s): %w", len(paths), err)
 	}
 
-	dt, err = time.Parse(dateLayout, text)
-	if err != nil {
-		return time.Time{}, false, fmt.Errorf("parsing DateTimeOriginal %q from %s: %w", text, path, err)
+	var records []struct {
+		SourceFile       string `json:"SourceFile"`
+		DateTimeOriginal string `json:"DateTimeOriginal"`
 	}
-	return dt, true, nil
+	if err := json.Unmarshal(out, &records); err != nil {
+		return nil, fmt.Errorf("parsing DateTimeOriginal batch response: %w", err)
+	}
+
+	for _, r := range records {
+		if r.DateTimeOriginal == "" {
+			continue
+		}
+		dt, err := time.Parse(dateLayout, r.DateTimeOriginal)
+		if err != nil {
+			return nil, fmt.Errorf("parsing DateTimeOriginal %q from %s: %w", r.DateTimeOriginal, r.SourceFile, err)
+		}
+		dates[r.SourceFile] = dt
+	}
+	return dates, nil
 }
 
 // ExtractPreview returns image bytes suitable for browser display, for

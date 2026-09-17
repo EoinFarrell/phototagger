@@ -27,9 +27,14 @@ func newFakeExif() *fakeExif {
 	}
 }
 
-func (f *fakeExif) ReadDateTimeOriginal(path string) (time.Time, bool, error) {
-	dt, ok := f.dates[path]
-	return dt, ok, nil
+func (f *fakeExif) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time, error) {
+	out := make(map[string]time.Time, len(paths))
+	for _, p := range paths {
+		if dt, ok := f.dates[p]; ok {
+			out[p] = dt
+		}
+	}
+	return out, nil
 }
 func (f *fakeExif) ReadExisting(path string) (exiftool.Existing, error) {
 	return f.existing[path], nil

@@ -29,33 +29,63 @@ func (f *fakeRunner) Output(args ...string) ([]byte, error) {
 	return out, err
 }
 
-func TestReadDateTimeOriginal_Present(t *testing.T) {
-	r := &fakeRunner{outputs: [][]byte{[]byte("2024:07:14 14:30:22\n")}}
+func TestReadDateTimeOriginalBatch(t *testing.T) {
+	json := `[
+		{"SourceFile":"a.jpg","DateTimeOriginal":"2024:07:14 14:30:22"},
+		{"SourceFile":"b.jpg"},
+		{"SourceFile":"c.jpg","DateTimeOriginal":"2024:01:01 08:00:00"}
+	]`
+	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
 	c := NewWithRunner(r)
 
-	dt, ok, err := c.ReadDateTimeOriginal("photo.jpg")
+	dates, err := c.ReadDateTimeOriginalBatch([]string{"a.jpg", "b.jpg", "c.jpg"})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if !ok {
-		t.Fatal("ok = false, want true")
+	if len(dates) != 2 {
+		t.Fatalf("got %d dates, want 2 (b.jpg has none): %v", len(dates), dates)
 	}
-	want := time.Date(2024, 7, 14, 14, 30, 22, 0, time.UTC)
-	if !dt.Equal(want) {
-		t.Errorf("dt = %v, want %v", dt, want)
+	if !dates["a.jpg"].Equal(time.Date(2024, 7, 14, 14, 30, 22, 0, time.UTC)) {
+		t.Errorf("a.jpg = %v", dates["a.jpg"])
+	}
+	if !dates["c.jpg"].Equal(time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC)) {
+		t.Errorf("c.jpg = %v", dates["c.jpg"])
+	}
+	if _, ok := dates["b.jpg"]; ok {
+		t.Errorf("b.jpg should be absent from the map, got %v", dates["b.jpg"])
+	}
+
+	// One exiftool invocation for the whole batch, not one per file.
+	if len(r.calls) != 1 {
+		t.Fatalf("expected 1 exiftool invocation, got %d: %v", len(r.calls), r.calls)
+	}
+	args := r.calls[0]
+	for _, want := range []string{"-j", "-DateTimeOriginal", "a.jpg", "b.jpg", "c.jpg"} {
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("args %v missing %q", args, want)
+		}
 	}
 }
 
-func TestReadDateTimeOriginal_Absent(t *testing.T) {
-	r := &fakeRunner{outputs: [][]byte{[]byte("-\n")}}
+func TestReadDateTimeOriginalBatch_Empty(t *testing.T) {
+	r := &fakeRunner{}
 	c := NewWithRunner(r)
 
-	_, ok, err := c.ReadDateTimeOriginal("photo.jpg")
+	dates, err := c.ReadDateTimeOriginalBatch(nil)
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if ok {
-		t.Error("ok = true, want false for missing tag")
+	if len(dates) != 0 {
+		t.Errorf("got %v, want empty", dates)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected no exiftool invocation for an empty batch, got %v", r.calls)
 	}
 }
 
