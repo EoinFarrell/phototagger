@@ -16,6 +16,11 @@ type fakeExif struct {
 	existing map[string]exiftool.Existing
 	written  map[string]exiftool.Fields
 	previews map[string][]byte
+
+	// onWrite, if set, runs at the start of WriteFields -- used to simulate a
+	// second Apply call arriving while the first is still mid-flight (see
+	// TestSession_Apply_RejectsOverlappingApply).
+	onWrite func()
 }
 
 func newFakeExif() *fakeExif {
@@ -40,6 +45,9 @@ func (f *fakeExif) ReadExisting(path string) (exiftool.Existing, error) {
 	return f.existing[path], nil
 }
 func (f *fakeExif) WriteFields(path string, fields exiftool.Fields) error {
+	if f.onWrite != nil {
+		f.onWrite()
+	}
 	f.written[path] = fields
 	return nil
 }
@@ -336,6 +344,43 @@ func TestSession_Apply_CollisionAppendsSuffix(t *testing.T) {
 	want := filepath.Join(tagged, "20240714-143022-01.jpg")
 	if res.NewPath != want {
 		t.Errorf("NewPath = %q, want %q", res.NewPath, want)
+	}
+}
+
+// TestSession_Apply_RejectsOverlappingApply guards against the root cause of
+// intermittently-missing GPS/altitude writes: Apply reads the current photo
+// and releases the lock before the slow exiftool write, then only re-acquires
+// it afterwards to advance the queue. Without a busy guard, a second Apply
+// arriving in that window would read the *same* current photo, silently
+// duplicating or clobbering its write instead of being rejected outright.
+func TestSession_Apply_RejectsOverlappingApply(t *testing.T) {
+	sess, _, _, exif := newTestSession(t, true)
+
+	var overlapCalled bool
+	var overlapErr error
+	exif.onWrite = func() {
+		overlapCalled = true
+		lat, lon := 53.35, -6.26
+		_, overlapErr = sess.Apply(ApplyRequest{
+			DateTime:        "2024-07-14T14:30:22",
+			LocationTouched: true,
+			Lat:             &lat,
+			Lon:             &lon,
+		})
+	}
+
+	if _, err := sess.Apply(ApplyRequest{DateTime: "2024-07-14T14:30:00"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !overlapCalled {
+		t.Fatal("expected the overlapping Apply to be attempted while the first was mid-write")
+	}
+	if overlapErr == nil {
+		t.Fatal("expected the overlapping Apply to be rejected while another Apply is in progress")
+	}
+	if got := sess.Remaining(); got != 1 {
+		t.Errorf("Remaining() = %d, want 1 (the overlapping call must not have advanced the queue)", got)
 	}
 }
 

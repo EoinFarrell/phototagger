@@ -8,8 +8,20 @@ let offsetManuallyEdited = false;
 let settingProgrammatically = false;
 let taggedDirName = '';
 let touched = { location: false, dateTime: false, keywords: false, caption: false };
+// True while a navigation request (start/skip/prev/apply) is in flight. Blocks
+// every handler that reads or sets form state, so a user interaction that
+// happens to land in that window can't be silently discarded when the
+// response arrives and renderCurrent() resets the form for a different photo.
+let busy = false;
 
 const $ = (id) => document.getElementById(id);
+
+function setBusy(v) {
+  busy = v;
+  $('apply-button').disabled = v;
+  $('skip-button').disabled = v;
+  $('prev-button').disabled = v;
+}
 
 function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -60,7 +72,7 @@ function initMap() {
     maxZoom: 19,
   }).addTo(map);
   map.on('click', (e) => {
-    if (settingProgrammatically) return;
+    if (settingProgrammatically || busy) return;
     setMarker(e.latlng.lat, e.latlng.lng);
     onManualPin(e.latlng.lat, e.latlng.lng);
   });
@@ -72,7 +84,7 @@ function setMarker(lat, lon) {
   } else {
     marker = L.marker([lat, lon], { draggable: true }).addTo(map);
     marker.on('dragend', () => {
-      if (settingProgrammatically) return;
+      if (settingProgrammatically || busy) return;
       const ll = marker.getLatLng();
       onManualPin(ll.lat, ll.lng);
     });
@@ -150,6 +162,7 @@ function populateFavouriteSelect() {
 }
 
 $('favourite-select').addEventListener('change', (e) => {
+  if (busy) return;
   const name = e.target.value;
   if (!name) return;
   const fav = favourites.find((f) => f.name === name);
@@ -165,6 +178,7 @@ $('favourite-select').addEventListener('change', (e) => {
 });
 
 $('save-favourite-button').addEventListener('click', async () => {
+  if (busy) return;
   if (!marker) {
     alert('Drop a pin on the map first.');
     return;
@@ -188,36 +202,37 @@ $('save-favourite-button').addEventListener('click', async () => {
 // ---- Field touch tracking ----
 
 $('datetime-input').addEventListener('input', () => {
-  if (settingProgrammatically) return;
+  if (settingProgrammatically || busy) return;
   touched.dateTime = true;
   offsetManuallyEdited = false;
   maybeResolveTimezone();
 });
 
 $('offset-input').addEventListener('input', () => {
-  if (settingProgrammatically) return;
+  if (settingProgrammatically || busy) return;
   offsetManuallyEdited = true;
   touched.dateTime = true;
   $('offset-input').classList.remove('required-missing');
 });
 
 $('altitude-input').addEventListener('input', () => {
-  if (settingProgrammatically) return;
+  if (settingProgrammatically || busy) return;
   touched.location = true;
 });
 
 $('keywords-input').addEventListener('input', () => {
-  if (settingProgrammatically) return;
+  if (settingProgrammatically || busy) return;
   touched.keywords = true;
 });
 
 $('caption-input').addEventListener('input', () => {
-  if (settingProgrammatically) return;
+  if (settingProgrammatically || busy) return;
   touched.caption = true;
 });
 
 document.querySelectorAll('.same-as-prev').forEach((btn) => {
   btn.addEventListener('click', () => {
+    if (busy) return;
     const group = btn.dataset.group;
     const prev = previousData[group];
     if (!prev) return;
@@ -251,6 +266,8 @@ function parseKeywords(text) {
 }
 
 function renderCurrent(data) {
+  setBusy(false);
+
   if (data.done) {
     switchView('done');
     return;
@@ -306,27 +323,35 @@ function buildApplyPayload() {
   };
 }
 
-$('skip-button').addEventListener('click', async () => {
-  const res = await fetch('/api/photo/skip', { method: 'POST' });
-  renderCurrent(await res.json());
-});
-
-$('prev-button').addEventListener('click', async () => {
-  const res = await fetch('/api/photo/prev', { method: 'POST' });
-  renderCurrent(await res.json());
-});
-
-$('apply-button').addEventListener('click', async () => {
-  const payload = buildApplyPayload();
-  const res = await fetch('/api/photo/apply', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    alert('Could not apply: ' + (err.error || res.statusText));
-    return;
+// runNavigation guards every skip/prev/apply request behind the busy flag,
+// and guarantees it's cleared on any failure (bad response or network error)
+// -- otherwise a single failed request would leave the buttons disabled and
+// every handler locked out for the rest of the session.
+async function runNavigation(action, fetchFn) {
+  if (busy) return;
+  setBusy(true);
+  try {
+    const res = await fetchFn();
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+    renderCurrent(await res.json());
+  } catch (e) {
+    setBusy(false);
+    alert(`Could not ${action}: ` + e.message);
   }
-  renderCurrent(await res.json());
-});
+}
+
+$('skip-button').addEventListener('click', () =>
+  runNavigation('skip', () => fetch('/api/photo/skip', { method: 'POST' })));
+
+$('prev-button').addEventListener('click', () =>
+  runNavigation('go back', () => fetch('/api/photo/prev', { method: 'POST' })));
+
+$('apply-button').addEventListener('click', () =>
+  runNavigation('apply', () => fetch('/api/photo/apply', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildApplyPayload()),
+  })));
 
 loadState();

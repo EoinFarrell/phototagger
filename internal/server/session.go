@@ -72,6 +72,7 @@ type Session struct {
 	entries []queue.Entry
 	applied []bool
 	current int
+	busy    bool // true while an Apply is running (WriteFields/moveFile), to reject overlapping Applies
 
 	exif      ExifClient
 	tz        TZResolver
@@ -321,6 +322,10 @@ type ApplyResult struct {
 // into the tagged directory (see the Renaming section of docs/plan.md).
 func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	s.mu.Lock()
+	if s.busy {
+		s.mu.Unlock()
+		return ApplyResult{}, fmt.Errorf("another apply is already in progress")
+	}
 	if s.current >= len(s.entries) {
 		s.mu.Unlock()
 		return ApplyResult{}, fmt.Errorf("nothing left to apply")
@@ -328,7 +333,14 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	photo := s.entries[s.current].Photo
 	flat := s.FlatLayout
 	taggedDir := s.TaggedDir
+	s.busy = true
 	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.busy = false
+		s.mu.Unlock()
+	}()
 
 	if req.DateTime == "" {
 		return ApplyResult{}, fmt.Errorf("dateTime is required")
