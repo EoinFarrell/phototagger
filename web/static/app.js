@@ -13,6 +13,12 @@ let touched = { location: false, dateTime: false, keywords: false, caption: fals
 // happens to land in that window can't be silently discarded when the
 // response arrives and renderCurrent() resets the form for a different photo.
 let busy = false;
+// Bumped every time something explicitly sets the altitude field's meaning
+// (a new photo renders, a new pin drops, a favourite is picked, or the user
+// edits it by hand). fetchElevation() captures this at call time and checks
+// it before writing back, so a slow lookup for a pin/photo that's since been
+// superseded can't silently clobber whatever's there now with a stale value.
+let altitudeGeneration = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -104,17 +110,18 @@ function onManualPin(lat, lon) {
   selectedFavouriteName = '';
   offsetManuallyEdited = false;
   $('favourite-select').value = '';
-  fetchElevation(lat, lon);
+  altitudeGeneration++;
+  fetchElevation(lat, lon, altitudeGeneration);
   maybeResolveTimezone();
 }
 
-async function fetchElevation(lat, lon) {
+async function fetchElevation(lat, lon, gen) {
   try {
     const res = await fetch('/api/elevation', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lon }),
     });
     const data = await res.json();
-    if (data.ok) $('altitude-input').value = data.alt;
+    if (data.ok && gen === altitudeGeneration) $('altitude-input').value = data.alt;
   } catch (e) {
     // Offline or unreachable: leave altitude as-is rather than blocking.
   }
@@ -170,6 +177,7 @@ $('favourite-select').addEventListener('change', (e) => {
   settingProgrammatically = true;
   setMarker(fav.lat, fav.lon);
   settingProgrammatically = false;
+  altitudeGeneration++;
   $('altitude-input').value = fav.alt;
   touched.location = true;
   selectedFavouriteName = fav.name;
@@ -188,8 +196,13 @@ $('save-favourite-button').addEventListener('click', async () => {
     alert('Enter a name for this location.');
     return;
   }
+  const altVal = $('altitude-input').value;
+  if (altVal === '') {
+    alert('Altitude is still loading — wait a moment, or enter it manually, then try again.');
+    return;
+  }
   const ll = marker.getLatLng();
-  const alt = parseFloat($('altitude-input').value) || 0;
+  const alt = parseFloat(altVal);
   const res = await fetch('/api/favourites', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, lat: ll.lat, lon: ll.lng, alt }),
@@ -217,6 +230,7 @@ $('offset-input').addEventListener('input', () => {
 
 $('altitude-input').addEventListener('input', () => {
   if (settingProgrammatically || busy) return;
+  altitudeGeneration++;
   touched.location = true;
 });
 
@@ -240,6 +254,7 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
     settingProgrammatically = true;
     if (group === 'location') {
       setMarker(prev.lat, prev.lon);
+      altitudeGeneration++;
       $('altitude-input').value = prev.alt ?? '';
       selectedFavouriteName = prev.favouriteName || '';
       $('favourite-select').value = selectedFavouriteName;
@@ -281,6 +296,7 @@ function renderCurrent(data) {
   offsetManuallyEdited = false;
   selectedFavouriteName = '';
   previousData = data.previous || {};
+  altitudeGeneration++;
 
   settingProgrammatically = true;
   const ex = data.existing || {};

@@ -1,8 +1,14 @@
 'use strict';
-// Minimal dependency-free DOM/Leaflet/fetch stubs sufficient to load and run
-// the real web/static/app.js under Node's vm module, for app.test.js. Not
-// part of the served app (kept out of web/static so //go:embed never picks
-// it up).
+// Minimal dependency-free DOM/Leaflet/fetch stubs, plus shared test-drive
+// helpers, sufficient to load and run the real web/static/app.js under
+// Node's vm module. Not part of the served app (kept out of web/static so
+// //go:embed never picks it up).
+
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const APP_JS = path.resolve(__dirname, '../static/app.js');
 
 class FakeClassList {
   constructor() { this._set = new Set(); }
@@ -144,4 +150,66 @@ async function flushMicrotasks(n = 10) {
   }
 }
 
-module.exports = { buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement };
+// ---- App loading + driving helpers, shared across test files ----
+
+function loadApp() {
+  const src = fs.readFileSync(APP_JS, 'utf8');
+  const { document, elements } = buildDom();
+  const { L, created } = buildFakeLeaflet();
+  const fetchMock = buildFetchMock();
+  const alerts = [];
+
+  const sandbox = {
+    document,
+    L,
+    fetch: fetchMock,
+    alert: (msg) => alerts.push(msg),
+    console,
+    Date, JSON, Math, parseFloat, parseInt, Object, Array, Promise, setTimeout, clearTimeout, setImmediate,
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: APP_JS });
+
+  return { elements, fetchMock, alerts, created };
+}
+
+function click(el) {
+  el.dispatchEvent({ type: 'click', target: el });
+}
+
+function photoResponse(index, existing) {
+  return {
+    done: false,
+    index,
+    total: 3,
+    relPath: `photo${index}.jpg`,
+    ext: 'jpg',
+    isHeic: false,
+    existing: existing || {},
+    previous: {},
+    previewUrl: '/api/photo/preview',
+  };
+}
+
+// Drives the app through the start screen up to the first photo being
+// rendered, resolving each fetch it issues along the way in order.
+async function startSession() {
+  const app = loadApp();
+  const { fetchMock } = app;
+
+  click(app.elements['start-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/start', { ok: true });
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/favourites', []);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
+  await flushMicrotasks();
+
+  return app;
+}
+
+module.exports = {
+  buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
+  loadApp, click, photoResponse, startSession,
+};
