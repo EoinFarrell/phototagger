@@ -18,6 +18,9 @@ let altitudeGeneration = 0;
 
 const $ = (id) => document.getElementById(id);
 
+// setBusy toggles formState's busy flag (see web/static/formstate.js for
+// what it means per action) and drives its only visible effect: disabling
+// the three navigation buttons.
 function setBusy(v) {
   formState.setBusy(v);
   $('apply-button').disabled = v;
@@ -348,12 +351,15 @@ function buildApplyPayload() {
   };
 }
 
-// runNavigation guards every skip/prev/apply request behind the busy flag,
-// and guarantees it's cleared on any failure (bad response or network error)
-// -- otherwise a single failed request would leave the buttons disabled and
-// every handler locked out for the rest of the session. Kept as a plain
-// async function (not wrapped in formState.guarded()) so it keeps returning
-// a Promise on the early-return path too, same as before this refactor.
+// runNavigation guards every skip/prev/apply request behind formState's
+// busy flag -- for Apply this doubles as an optimistic mirror of the
+// server's authoritative lock (see the busy field's doc comment in
+// internal/server/session.go and issue #11) -- and guarantees it's cleared
+// on any failure (bad response or network error) -- otherwise a single
+// failed request would leave the buttons disabled and every handler locked
+// out for the rest of the session. Kept as a plain async function (not
+// wrapped in formState.guarded()) so it keeps returning a Promise on the
+// early-return path too, same as before this refactor.
 async function runNavigation(action, fetchFn) {
   if (formState.isBusy()) return;
   setBusy(true);

@@ -76,7 +76,20 @@ type Session struct {
 	entries []queue.Entry
 	applied []bool
 	current int
-	busy    bool // true while an Apply is running (WriteFields/rename), to reject overlapping Applies
+
+	// busy is the authoritative Apply-in-progress lock: true while
+	// WriteFields/rename is running, causing Apply() below to reject
+	// overlapping requests. web/static/formstate.js's busy flag is this
+	// lock's optimistic client-side mirror when it's guarding Apply --
+	// kept only for UX (disabling the buttons instantly instead of
+	// round-tripping to a rejected request); deleting the client copy
+	// loses nothing but a disabled-button flash, deleting this one
+	// reopens issue #1's race. That same client flag also guards Skip and
+	// Prev below, which have no server-side lock at all -- both are
+	// synchronous, mutex-only pointer moves with nothing worth rejecting a
+	// second request over -- so there it's pure click-debounce, not a
+	// mirror of anything here. See issue #11.
+	busy bool
 
 	exif      ExifClient
 	tz        TZResolver

@@ -2,11 +2,22 @@
 // Owns the guard state that keeps web/static/app.js's DOM handlers from
 // racing themselves or their own programmatic field writes: the in-flight
 // `busy` flag, the Touched-field set (see CONTEXT.md), and the
-// programmatic-write bracket. See GitHub issue #10 -- these guards are
-// load-bearing (issues #1 and #2 were caused by missing them), so one
-// module owns them behind a small interface instead of the ad hoc
-// `if (x || busy) return;` copied at every call site, which nothing
-// enforced a new call site would get right.
+// programmatic-write bracket. See GitHub issue #10 -- the Touched-field and
+// programmatic-write guards are load-bearing (issues #1 and #2 were caused
+// by missing them), so one module owns all three behind a small interface
+// instead of the ad hoc `if (x || busy) return;` copied at every call site,
+// which nothing enforced a new call site would get right.
+//
+// `busy` itself is different, and plays two roles depending which action
+// it's guarding. For Apply, it's an optimistic client-side mirror of
+// internal/server/session.go's authoritative `Session.busy` lock -- see
+// that field's doc comment for the full deletion-test reasoning (issue
+// #11). For Skip/Prev it isn't mirroring anything: the server holds no
+// lock there, so `busy` is pure click-debounce. One flag serves both
+// because the visible behaviour (disable the buttons while a request is
+// in flight) is identical either way -- splitting it into two flags, or
+// renaming it to something Apply-specific, would invent a distinction the
+// UI never needs to make.
 //
 // Loaded as a classic global script (same pattern as Leaflet's `L`), before
 // app.js, so `createFormState` is just a global function both index.html's
@@ -25,6 +36,9 @@ function createFormState() {
   let programmatic = false;
   let touched = freshTouched();
 
+  // isBusy/setBusy read and write the busy flag described above -- for
+  // Apply, that's the optimistic mirror, never the authoritative lock
+  // itself, which lives server-side.
   function isBusy() { return busy; }
   function setBusy(v) { busy = v; }
 
