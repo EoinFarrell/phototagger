@@ -45,6 +45,7 @@ function buildDom() {
     'start-view', 'tag-view', 'done-view', 'done-tagged-dir', 'start-summary', 'start-button',
     'favourite-select', 'save-favourite-button', 'favourite-name-input',
     'datetime-input', 'offset-input', 'altitude-input', 'keywords-input', 'caption-input',
+    'additional-details', 'additional-required-badge',
     'tag-progress', 'tag-relpath', 'preview-img', 'skip-button', 'prev-button', 'apply-button',
   ];
   ids.forEach((id) => { elements[id] = new FakeElement(id); });

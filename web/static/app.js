@@ -127,6 +127,23 @@ async function fetchElevation(lat, lon, gen) {
   }
 }
 
+// Offset is a real "you must fill this in" state when timezone resolution
+// fails -- it lives inside the collapsed #additional-details disclosure, so
+// going required also force-expands the disclosure and shows the summary
+// badge, or the user could miss it and submit an incomplete Apply.
+function setOffsetRequired(missing) {
+  const offsetInput = $('offset-input');
+  offsetInput.required = missing;
+  if (missing) {
+    offsetInput.classList.add('required-missing');
+    $('additional-required-badge').hidden = false;
+    $('additional-details').open = true;
+  } else {
+    offsetInput.classList.remove('required-missing');
+    $('additional-required-badge').hidden = true;
+  }
+}
+
 async function maybeResolveTimezone() {
   if (!marker || offsetManuallyEdited) return;
   const dtVal = $('datetime-input').value;
@@ -141,11 +158,9 @@ async function maybeResolveTimezone() {
     const data = await res.json();
     if (data.ok) {
       offsetInput.value = data.offset;
-      offsetInput.required = false;
-      offsetInput.classList.remove('required-missing');
+      setOffsetRequired(false);
     } else {
-      offsetInput.required = true;
-      offsetInput.classList.add('required-missing');
+      setOffsetRequired(true);
     }
   } catch (e) {
     // Offline: leave the offset field as-is (still editable manually).
@@ -225,7 +240,7 @@ $('offset-input').addEventListener('input', () => {
   if (settingProgrammatically || busy) return;
   offsetManuallyEdited = true;
   touched.dateTime = true;
-  $('offset-input').classList.remove('required-missing');
+  setOffsetRequired(false);
 });
 
 $('altitude-input').addEventListener('input', () => {
@@ -261,7 +276,7 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
     } else if (group === 'dateTime') {
       $('datetime-input').value = prev.dateTime || '';
       $('offset-input').value = prev.offset || '';
-      $('offset-input').classList.remove('required-missing');
+      setOffsetRequired(false);
       offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
     } else if (group === 'keywords') {
       $('keywords-input').value = (prev.keywords || []).join(', ');
@@ -297,12 +312,13 @@ function renderCurrent(data) {
   selectedFavouriteName = '';
   previousData = data.previous || {};
   altitudeGeneration++;
+  $('additional-details').open = false;
 
   settingProgrammatically = true;
   const ex = data.existing || {};
   $('datetime-input').value = ex.dateTime || '';
   $('offset-input').value = ex.offset || '';
-  $('offset-input').classList.remove('required-missing');
+  setOffsetRequired(false);
   if (ex.lat != null && ex.lon != null) {
     setMarker(ex.lat, ex.lon);
   } else {

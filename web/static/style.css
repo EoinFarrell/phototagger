@@ -86,3 +86,16 @@ label {
 
 #save-favourite-row { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
 #save-favourite-row input { flex: 1; }
+
+#additional-details {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin-bottom: 1rem;
+}
+
+#additional-details summary { cursor: pointer; font-weight: 600; }
+
+#additional-details[open] summary { margin-bottom: 0.4rem; }
+
+#additional-required-badge { color: #d63535; font-weight: normal; font-size: 0.85em; }

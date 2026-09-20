@@ -32,7 +32,7 @@
 
     <form id="tag-form">
       <fieldset data-group="location">
-        <legend>Location &amp; altitude
+        <legend>Location
           <button type="button" class="same-as-prev" data-group="location">↩ same as previous</button>
         </legend>
         <label>Favourite
@@ -41,7 +41,6 @@
           </select>
         </label>
         <div id="map"></div>
-        <label>Altitude (m) <input type="number" step="any" id="altitude-input"></label>
         <div id="save-favourite-row">
           <input type="text" id="favourite-name-input" placeholder="Name this location…">
           <button type="button" id="save-favourite-button">Save current pin as favourite</button>
@@ -53,8 +52,6 @@
           <button type="button" class="same-as-prev" data-group="dateTime">↩ same as previous</button>
         </legend>
         <label>Date/time <input type="datetime-local" id="datetime-input" step="1"></label>
-        <label>UTC offset <input type="text" id="offset-input" placeholder="+01:00"></label>
-        <span id="offset-status"></span>
       </fieldset>
 
       <fieldset data-group="keywords">
@@ -70,6 +67,13 @@
         </legend>
         <label><textarea id="caption-input" rows="2"></textarea></label>
       </fieldset>
+
+      <details id="additional-details">
+        <summary>Additional <span id="additional-required-badge" hidden>⚠ UTC offset needed</span></summary>
+        <label>Altitude (m) <input type="number" step="any" id="altitude-input"></label>
+        <label>UTC offset <input type="text" id="offset-input" placeholder="+01:00"></label>
+        <span id="offset-status"></span>
+      </details>
     </form>
   </div>
 
