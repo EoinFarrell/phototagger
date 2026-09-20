@@ -5,13 +5,10 @@ let favourites = [];
 let previousData = {};
 let selectedFavouriteName = '';
 let offsetManuallyEdited = false;
-let settingProgrammatically = false;
-let touched = { location: false, dateTime: false, keywords: false, caption: false };
-// True while a navigation request (start/skip/prev/apply) is in flight. Blocks
-// every handler that reads or sets form state, so a user interaction that
-// happens to land in that window can't be silently discarded when the
-// response arrives and renderCurrent() resets the form for a different photo.
-let busy = false;
+// Owns the busy flag, the Touched-field set, and the programmatic-write
+// guard (formerly `busy`, `touched`, `settingProgrammatically` here) behind
+// a single interface -- see web/static/formstate.js.
+const formState = createFormState();
 // Bumped every time something explicitly sets the altitude field's meaning
 // (a new photo renders, a new pin drops, a favourite is picked, or the user
 // edits it by hand). fetchElevation() captures this at call time and checks
@@ -22,7 +19,7 @@ let altitudeGeneration = 0;
 const $ = (id) => document.getElementById(id);
 
 function setBusy(v) {
-  busy = v;
+  formState.setBusy(v);
   $('apply-button').disabled = v;
   $('skip-button').disabled = v;
   $('prev-button').disabled = v;
@@ -85,11 +82,10 @@ function initMap() {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19,
   }).addTo(map);
-  map.on('click', (e) => {
-    if (settingProgrammatically || busy) return;
+  map.on('click', formState.guardedField((e) => {
     setMarker(e.latlng.lat, e.latlng.lng);
     onManualPin(e.latlng.lat, e.latlng.lng);
-  });
+  }));
 }
 
 function setMarker(lat, lon) {
@@ -97,11 +93,10 @@ function setMarker(lat, lon) {
     marker.setLatLng([lat, lon]);
   } else {
     marker = L.marker([lat, lon], { draggable: true }).addTo(map);
-    marker.on('dragend', () => {
-      if (settingProgrammatically || busy) return;
+    marker.on('dragend', formState.guardedField(() => {
       const ll = marker.getLatLng();
       onManualPin(ll.lat, ll.lng);
-    });
+    }));
   }
   map.setView([lat, lon], Math.max(map.getZoom(), 12));
 }
@@ -114,7 +109,7 @@ function clearMarker() {
 }
 
 function onManualPin(lat, lon) {
-  touched.location = true;
+  formState.touch('location');
   selectedFavouriteName = '';
   offsetManuallyEdited = false;
   $('favourite-select').value = '';
@@ -191,25 +186,21 @@ function populateFavouriteSelect() {
   sel.value = current;
 }
 
-$('favourite-select').addEventListener('change', (e) => {
-  if (busy) return;
+$('favourite-select').addEventListener('change', formState.guarded((e) => {
   const name = e.target.value;
   if (!name) return;
   const fav = favourites.find((f) => f.name === name);
   if (!fav) return;
-  settingProgrammatically = true;
-  setMarker(fav.lat, fav.lon);
-  settingProgrammatically = false;
+  formState.applyProgrammaticUpdate(() => setMarker(fav.lat, fav.lon));
   altitudeGeneration++;
   $('altitude-input').value = fav.alt;
-  touched.location = true;
+  formState.touch('location');
   selectedFavouriteName = fav.name;
   offsetManuallyEdited = false;
   maybeResolveTimezone();
-});
+}));
 
-$('save-favourite-button').addEventListener('click', async () => {
-  if (busy) return;
+$('save-favourite-button').addEventListener('click', formState.guarded(async () => {
   if (!marker) {
     alert('Drop a pin on the map first.');
     return;
@@ -233,68 +224,62 @@ $('save-favourite-button').addEventListener('click', async () => {
   favourites = await res.json();
   populateFavouriteSelect();
   $('favourite-name-input').value = '';
-});
+}));
 
 // ---- Field touch tracking ----
 
-$('datetime-input').addEventListener('input', () => {
-  if (settingProgrammatically || busy) return;
-  touched.dateTime = true;
+$('datetime-input').addEventListener('input', formState.guardedField(() => {
+  formState.touch('dateTime');
   offsetManuallyEdited = false;
   maybeResolveTimezone();
-});
+}));
 
-$('offset-input').addEventListener('input', () => {
-  if (settingProgrammatically || busy) return;
+$('offset-input').addEventListener('input', formState.guardedField(() => {
   offsetManuallyEdited = true;
-  touched.dateTime = true;
+  formState.touch('dateTime');
   setOffsetRequired(false);
-});
+}));
 
-$('altitude-input').addEventListener('input', () => {
-  if (settingProgrammatically || busy) return;
+$('altitude-input').addEventListener('input', formState.guardedField(() => {
   altitudeGeneration++;
-  touched.location = true;
-});
+  formState.touch('location');
+}));
 
-$('keywords-input').addEventListener('input', () => {
-  if (settingProgrammatically || busy) return;
-  touched.keywords = true;
-});
+$('keywords-input').addEventListener('input', formState.guardedField(() => {
+  formState.touch('keywords');
+}));
 
-$('caption-input').addEventListener('input', () => {
-  if (settingProgrammatically || busy) return;
-  touched.caption = true;
-});
+$('caption-input').addEventListener('input', formState.guardedField(() => {
+  formState.touch('caption');
+}));
 
 document.querySelectorAll('.same-as-prev').forEach((btn) => {
-  btn.addEventListener('click', () => {
-    if (busy) return;
+  btn.addEventListener('click', formState.guarded(() => {
     const group = btn.dataset.group;
     const prev = previousData[group];
     if (!prev) return;
 
-    settingProgrammatically = true;
-    if (group === 'location') {
-      setMarker(prev.lat, prev.lon);
-      altitudeGeneration++;
-      $('altitude-input').value = prev.alt ?? '';
-      selectedFavouriteName = prev.favouriteName || '';
-      $('favourite-select').value = selectedFavouriteName;
-    } else if (group === 'dateTime') {
-      $('datetime-input').value = prev.dateTime || '';
-      $('offset-input').value = prev.offset || '';
-      setOffsetRequired(false);
-      offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
-    } else if (group === 'keywords') {
-      $('keywords-input').value = (prev.keywords || []).join(', ');
-    } else if (group === 'caption') {
-      $('caption-input').value = prev.caption || '';
-    }
-    settingProgrammatically = false;
+    formState.applyProgrammaticUpdate(() => {
+      if (group === 'location') {
+        setMarker(prev.lat, prev.lon);
+        altitudeGeneration++;
+        $('altitude-input').value = prev.alt ?? '';
+        selectedFavouriteName = prev.favouriteName || '';
+        $('favourite-select').value = selectedFavouriteName;
+      } else if (group === 'dateTime') {
+        $('datetime-input').value = prev.dateTime || '';
+        $('offset-input').value = prev.offset || '';
+        setOffsetRequired(false);
+        offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
+      } else if (group === 'keywords') {
+        $('keywords-input').value = (prev.keywords || []).join(', ');
+      } else if (group === 'caption') {
+        $('caption-input').value = prev.caption || '';
+      }
+    });
 
-    touched[group] = true;
-  });
+    formState.touch(group);
+  }));
 });
 
 // ---- Tagging queue ----
@@ -315,28 +300,28 @@ function renderCurrent(data) {
   $('tag-relpath').textContent = data.relPath;
   $('preview-img').src = `${data.previewUrl}?i=${data.index}&t=${Date.now()}`;
 
-  touched = { location: false, dateTime: false, keywords: false, caption: false };
+  formState.resetTouched();
   offsetManuallyEdited = false;
   selectedFavouriteName = '';
   previousData = data.previous || {};
   altitudeGeneration++;
   $('additional-details').open = false;
 
-  settingProgrammatically = true;
-  const ex = data.existing || {};
-  $('datetime-input').value = ex.dateTime || '';
-  $('offset-input').value = ex.offset || '';
-  setOffsetRequired(false);
-  if (ex.lat != null && ex.lon != null) {
-    setMarker(ex.lat, ex.lon);
-  } else {
-    clearMarker();
-  }
-  $('altitude-input').value = ex.alt ?? '';
-  $('favourite-select').value = '';
-  $('keywords-input').value = (ex.keywords || []).join(', ');
-  $('caption-input').value = ex.caption || '';
-  settingProgrammatically = false;
+  formState.applyProgrammaticUpdate(() => {
+    const ex = data.existing || {};
+    $('datetime-input').value = ex.dateTime || '';
+    $('offset-input').value = ex.offset || '';
+    setOffsetRequired(false);
+    if (ex.lat != null && ex.lon != null) {
+      setMarker(ex.lat, ex.lon);
+    } else {
+      clearMarker();
+    }
+    $('altitude-input').value = ex.alt ?? '';
+    $('favourite-select').value = '';
+    $('keywords-input').value = (ex.keywords || []).join(', ');
+    $('caption-input').value = ex.caption || '';
+  });
 
   document.querySelectorAll('.same-as-prev').forEach((btn) => {
     btn.disabled = !previousData[btn.dataset.group];
@@ -350,25 +335,27 @@ function buildApplyPayload() {
 
   return {
     dateTime: $('datetime-input').value,
-    dateTimeTouched: touched.dateTime,
+    dateTimeTouched: formState.isTouched('dateTime'),
     offset: $('offset-input').value,
     lat, lon,
     alt: altVal === '' ? null : parseFloat(altVal),
-    locationTouched: touched.location,
+    locationTouched: formState.isTouched('location'),
     favouriteName: selectedFavouriteName,
     keywords: parseKeywords($('keywords-input').value),
-    keywordsTouched: touched.keywords,
+    keywordsTouched: formState.isTouched('keywords'),
     caption: $('caption-input').value,
-    captionTouched: touched.caption,
+    captionTouched: formState.isTouched('caption'),
   };
 }
 
 // runNavigation guards every skip/prev/apply request behind the busy flag,
 // and guarantees it's cleared on any failure (bad response or network error)
 // -- otherwise a single failed request would leave the buttons disabled and
-// every handler locked out for the rest of the session.
+// every handler locked out for the rest of the session. Kept as a plain
+// async function (not wrapped in formState.guarded()) so it keeps returning
+// a Promise on the early-return path too, same as before this refactor.
 async function runNavigation(action, fetchFn) {
-  if (busy) return;
+  if (formState.isBusy()) return;
   setBusy(true);
   try {
     const res = await fetchFn();
@@ -425,7 +412,7 @@ function ownsArrowKeys(el) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (busy || $('tag-view').hidden) return;
+  if (formState.isBusy() || $('tag-view').hidden) return;
 
   if (e.key === 'Enter') {
     if (hasOwnEnterBehavior(e.target)) return;

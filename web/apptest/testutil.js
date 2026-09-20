@@ -9,6 +9,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const APP_JS = path.resolve(__dirname, '../static/app.js');
+const FORM_STATE_JS = path.resolve(__dirname, '../static/formstate.js');
 
 class FakeClassList {
   constructor() { this._set = new Set(); }
@@ -188,6 +189,7 @@ async function flushMicrotasks(n = 10) {
 // ---- App loading + driving helpers, shared across test files ----
 
 function loadApp() {
+  const formStateSrc = fs.readFileSync(FORM_STATE_JS, 'utf8');
   const src = fs.readFileSync(APP_JS, 'utf8');
   const { document, elements, modeRadios } = buildDom();
   const { L, created } = buildFakeLeaflet();
@@ -203,9 +205,24 @@ function loadApp() {
     Date, JSON, Math, parseFloat, parseInt, Object, Array, Promise, setTimeout, clearTimeout, setImmediate,
   };
   vm.createContext(sandbox);
+  // Loaded as two separate scripts sharing one global scope, mirroring
+  // index.html's <script src="/formstate.js"> before <script src="/app.js">.
+  vm.runInContext(formStateSrc, sandbox, { filename: FORM_STATE_JS });
   vm.runInContext(src, sandbox, { filename: APP_JS });
 
   return { elements, fetchMock, alerts, created, document, modeRadios };
+}
+
+// Loads formstate.js alone, without app.js or any DOM/Leaflet/fetch stubs,
+// so its state-machine behaviour can be tested directly through its own
+// function interface -- the "tests hit a function interface instead of a
+// fake DOM" win from issue #10.
+function loadFormStateModule() {
+  const src = fs.readFileSync(FORM_STATE_JS, 'utf8');
+  const sandbox = {};
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox, { filename: FORM_STATE_JS });
+  return sandbox.createFormState;
 }
 
 function click(el) {
@@ -256,5 +273,5 @@ async function startSession() {
 
 module.exports = {
   buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
-  loadApp, click, keydown, photoResponse, startSession,
+  loadApp, loadFormStateModule, click, keydown, photoResponse, startSession,
 };
