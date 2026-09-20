@@ -9,12 +9,6 @@ let offsetManuallyEdited = false;
 // guard (formerly `busy`, `touched`, `settingProgrammatically` here) behind
 // a single interface -- see web/static/formstate.js.
 const formState = createFormState();
-// Bumped every time something explicitly sets the altitude field's meaning
-// (a new photo renders, a new pin drops, a favourite is picked, or the user
-// edits it by hand). fetchElevation() captures this at call time and checks
-// it before writing back, so a slow lookup for a pin/photo that's since been
-// superseded can't silently clobber whatever's there now with a stale value.
-let altitudeGeneration = 0;
 
 const $ = (id) => document.getElementById(id);
 
@@ -116,21 +110,8 @@ function onManualPin(lat, lon) {
   selectedFavouriteName = '';
   offsetManuallyEdited = false;
   $('favourite-select').value = '';
-  altitudeGeneration++;
-  fetchElevation(lat, lon, altitudeGeneration);
+  formState.requestElevation(lat, lon, (alt) => { $('altitude-input').value = alt; });
   maybeResolveTimezone();
-}
-
-async function fetchElevation(lat, lon, gen) {
-  try {
-    const res = await fetch('/api/elevation', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lon }),
-    });
-    const data = await res.json();
-    if (data.ok && gen === altitudeGeneration) $('altitude-input').value = data.alt;
-  } catch (e) {
-    // Offline or unreachable: leave altitude as-is rather than blocking.
-  }
 }
 
 // Offset is a real "you must fill this in" state when timezone resolution
@@ -195,7 +176,7 @@ $('favourite-select').addEventListener('change', formState.guarded((e) => {
   const fav = favourites.find((f) => f.name === name);
   if (!fav) return;
   formState.applyProgrammaticUpdate(() => setMarker(fav.lat, fav.lon));
-  altitudeGeneration++;
+  formState.invalidateElevation();
   $('altitude-input').value = fav.alt;
   formState.touch('location');
   selectedFavouriteName = fav.name;
@@ -244,7 +225,7 @@ $('offset-input').addEventListener('input', formState.guardedField(() => {
 }));
 
 $('altitude-input').addEventListener('input', formState.guardedField(() => {
-  altitudeGeneration++;
+  formState.invalidateElevation();
   formState.touch('location');
 }));
 
@@ -265,7 +246,7 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
     formState.applyProgrammaticUpdate(() => {
       if (group === 'location') {
         setMarker(prev.lat, prev.lon);
-        altitudeGeneration++;
+        formState.invalidateElevation();
         $('altitude-input').value = prev.alt ?? '';
         selectedFavouriteName = prev.favouriteName || '';
         $('favourite-select').value = selectedFavouriteName;
@@ -307,7 +288,7 @@ function renderCurrent(data) {
   offsetManuallyEdited = false;
   selectedFavouriteName = '';
   previousData = data.previous || {};
-  altitudeGeneration++;
+  formState.invalidateElevation();
   $('additional-details').open = false;
 
   formState.applyProgrammaticUpdate(() => {

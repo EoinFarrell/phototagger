@@ -4,12 +4,15 @@
 // Root cause: two independent bugs, both on the same LocationTouched path
 // as issue #1:
 //
-//  1. fetchElevation() writes $('altitude-input').value whenever its
-//     response arrives, with no check that the pin/photo it was looked up
-//     for is still the one on screen. A pin dropped, then replaced by a
-//     second pin (or a favourite, or a manual edit, or a photo change)
-//     before the first lookup resolves, could have its correct value
-//     silently clobbered by the earlier, now-stale response.
+//  1. The elevation lookup triggered by dropping a pin writes
+//     $('altitude-input').value whenever its response arrives, with no
+//     check that the pin/photo it was looked up for is still the one on
+//     screen. A pin dropped, then replaced by a second pin (or a
+//     favourite, or a manual edit, or a photo change) before the first
+//     lookup resolves, could have its correct value silently clobbered by
+//     the earlier, now-stale response. (As of issue #12, the cancellation
+//     token this depends on is owned by web/static/formstate.js's
+//     requestElevation()/invalidateElevation(), not a raw counter here.)
 //  2. save-favourite-button read the altitude via
 //     `parseFloat(...) || 0`, so saving a favourite before its elevation
 //     lookup had resolved (very easy to do -- drop a pin, immediately name

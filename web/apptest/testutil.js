@@ -213,13 +213,16 @@ function loadApp() {
   return { elements, fetchMock, alerts, created, document, modeRadios };
 }
 
-// Loads formstate.js alone, without app.js or any DOM/Leaflet/fetch stubs,
-// so its state-machine behaviour can be tested directly through its own
-// function interface -- the "tests hit a function interface instead of a
-// fake DOM" win from issue #10.
-function loadFormStateModule() {
+// Loads formstate.js alone, without app.js or any DOM/Leaflet stubs, so its
+// state-machine behaviour can be tested directly through its own function
+// interface -- the "tests hit a function interface instead of a fake DOM"
+// win from issue #10. requestElevation (issue #12) is formstate.js's one
+// dependency on a Web API rather than the DOM, so callers that exercise it
+// pass a fetch mock in `sandboxExtra`; everything else needs no sandbox at
+// all.
+function loadFormStateModule(sandboxExtra = {}) {
   const src = fs.readFileSync(FORM_STATE_JS, 'utf8');
-  const sandbox = {};
+  const sandbox = { ...sandboxExtra };
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: FORM_STATE_JS });
   return sandbox.createFormState;

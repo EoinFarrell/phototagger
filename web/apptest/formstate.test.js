@@ -4,19 +4,32 @@
 // the programmatic-write guard that web/static/app.js previously
 // duplicated as ad hoc `if (x || busy) return;` checks at every call site.
 //
+// Also covers GitHub issue #12 (fold the altitudeGeneration cancellation
+// token into this module): requestElevation()/invalidateElevation() below
+// own the same job as the old altitudeGeneration counter, behind one call
+// site per action instead of five.
+//
 // This loads and drives the real web/static/formstate.js (unmodified, via
 // Node's vm module) through its own function interface -- no fake DOM
-// required, since the module itself has no DOM dependency.
+// required, since the module itself has no DOM dependency. requestElevation
+// is this module's one dependency on a Web API (fetch) rather than the DOM,
+// so those tests inject a fetch mock; every other test needs no sandbox.
 //
 // Run with: node --test web/apptest/formstate.test.js
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { loadFormStateModule } = require('./testutil');
+const { loadFormStateModule, buildFetchMock, flushMicrotasks } = require('./testutil');
 
 function newState() {
   const createFormState = loadFormStateModule();
   return createFormState();
+}
+
+function newStateWithFetch() {
+  const fetchMock = buildFetchMock();
+  const createFormState = loadFormStateModule({ fetch: fetchMock });
+  return { state: createFormState(), fetchMock };
 }
 
 test('starts idle, with every group untouched', () => {
@@ -130,4 +143,56 @@ test('applyProgrammaticUpdate() clears its flag even if the callback throws', ()
   }, /boom/);
 
   assert.equal(handler(), 'ran', 'the programmatic flag must not be left stuck on after a throw');
+});
+
+test('requestElevation() calls onResult with the resolved altitude', async () => {
+  const { state, fetchMock } = newStateWithFetch();
+  const results = [];
+
+  state.requestElevation(1, 2, (alt) => results.push(alt));
+  fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 42 });
+  await flushMicrotasks();
+
+  assert.deepEqual(results, [42]);
+});
+
+test('requestElevation() drops a result superseded by a second requestElevation() call', async () => {
+  const { state, fetchMock } = newStateWithFetch();
+  const results = [];
+
+  state.requestElevation(1, 2, (alt) => results.push(alt));
+  state.requestElevation(3, 4, (alt) => results.push(alt));
+
+  const [first, second] = fetchMock.pending;
+  // Resolve the newer request first, then the stale one -- real network
+  // responses can arrive in either order.
+  second.resolve({ ok: true, json: async () => ({ ok: true, alt: 42 }) });
+  await flushMicrotasks();
+  first.resolve({ ok: true, json: async () => ({ ok: true, alt: 999 }) });
+  await flushMicrotasks();
+
+  assert.deepEqual(results, [42], 'the stale first lookup must not call onResult');
+});
+
+test('requestElevation() drops a result superseded by invalidateElevation()', async () => {
+  const { state, fetchMock } = newStateWithFetch();
+  const results = [];
+
+  state.requestElevation(1, 2, (alt) => results.push(alt));
+  state.invalidateElevation();
+  fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 999 });
+  await flushMicrotasks();
+
+  assert.deepEqual(results, [], 'a lookup invalidated by an unrelated field write must not call onResult');
+});
+
+test('requestElevation() does not call onResult when the response is not ok', async () => {
+  const { state, fetchMock } = newStateWithFetch();
+  const results = [];
+
+  state.requestElevation(1, 2, (alt) => results.push(alt));
+  fetchMock.resolveMatching('/api/elevation', { ok: false });
+  await flushMicrotasks();
+
+  assert.deepEqual(results, []);
 });
