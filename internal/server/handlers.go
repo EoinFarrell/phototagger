@@ -61,8 +61,6 @@ func writeError(w http.ResponseWriter, status int, err error) {
 type stateResponse struct {
 	SourceDir      string         `json:"sourceDir"`
 	BackupDir      string         `json:"backupDir"`
-	TaggedDir      string         `json:"taggedDir"`
-	FlatLayout     bool           `json:"flatLayout"`
 	PhotoCount     int            `json:"photoCount"`
 	ExtCounts      map[string]int `json:"extCounts"`
 	SubfolderCount int            `json:"subfolderCount"`
@@ -85,8 +83,6 @@ func handleState(sess *Session) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, stateResponse{
 			SourceDir:      sess.SourceDir,
 			BackupDir:      sess.BackupDir,
-			TaggedDir:      sess.TaggedDir,
-			FlatLayout:     sess.FlatLayout,
 			PhotoCount:     len(sess.ScanResult.Photos),
 			ExtCounts:      extCounts,
 			SubfolderCount: sess.ScanResult.SubfolderCount,
@@ -103,16 +99,6 @@ func handleStart(sess *Session) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var req struct {
-			FlatLayout bool `json:"flatLayout"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		sess.mu.Lock()
-		sess.FlatLayout = req.FlatLayout
-		sess.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }

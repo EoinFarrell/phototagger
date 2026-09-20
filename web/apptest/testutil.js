@@ -42,7 +42,7 @@ class FakeElement {
 function buildDom() {
   const elements = {};
   const ids = [
-    'start-view', 'tag-view', 'done-view', 'done-tagged-dir', 'start-summary', 'start-button',
+    'start-view', 'tag-view', 'done-view', 'start-summary', 'start-button',
     'favourite-select', 'save-favourite-button', 'favourite-name-input',
     'datetime-input', 'offset-input', 'altitude-input', 'keywords-input', 'caption-input',
     'additional-details', 'additional-required-badge',
@@ -56,15 +56,13 @@ function buildDom() {
     return el;
   });
 
-  const layoutRadio = { value: 'flat' };
-
   const document = {
     getElementById: (id) => {
       if (!elements[id]) throw new Error(`no stub element for id="${id}"`);
       return elements[id];
     },
     querySelectorAll: (sel) => (sel === '.same-as-prev' ? sameAsPrevButtons : []),
-    querySelector: (sel) => (sel === 'input[name=layout]:checked' ? layoutRadio : null),
+    querySelector: () => null,
   };
 
   return { document, elements, sameAsPrevButtons };

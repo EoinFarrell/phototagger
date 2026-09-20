@@ -6,7 +6,6 @@ let previousData = {};
 let selectedFavouriteName = '';
 let offsetManuallyEdited = false;
 let settingProgrammatically = false;
-let taggedDirName = '';
 let touched = { location: false, dateTime: false, keywords: false, caption: false };
 // True while a navigation request (start/skip/prev/apply) is in flight. Blocks
 // every handler that reads or sets form state, so a user interaction that
@@ -37,7 +36,6 @@ function switchView(name) {
   $('start-view').hidden = name !== 'start';
   $('tag-view').hidden = name !== 'tag';
   $('done-view').hidden = name !== 'done';
-  if (name === 'done') $('done-tagged-dir').textContent = taggedDirName;
 }
 
 // ---- Start screen ----
@@ -45,12 +43,11 @@ function switchView(name) {
 async function loadState() {
   const res = await fetch('/api/state');
   const data = await res.json();
-  taggedDirName = data.taggedDir;
 
   const extLine = Object.entries(data.extCounts).map(([ext, count]) => `${count} .${ext}`).join(', ') || 'none';
   let html = `<p><strong>${data.photoCount}</strong> photo(s) found in <code>${escapeHtml(data.sourceDir)}</code> ` +
     `across <strong>${data.subfolderCount}</strong> subfolder(s): ${extLine}.</p>`;
-  html += `<p>Backup: <code>${escapeHtml(data.backupDir)}</code> &nbsp; Tagged output: <code>${escapeHtml(data.taggedDir)}</code></p>`;
+  html += `<p>Backup: <code>${escapeHtml(data.backupDir)}</code></p>`;
   if (data.skipped && data.skipped.length) {
     html += `<details><summary>${data.skipped.length} skipped/non-applicable file(s)</summary>` +
       `<ul id="skipped-list">${data.skipped.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul></details>`;
@@ -60,8 +57,7 @@ async function loadState() {
 }
 
 $('start-button').addEventListener('click', async () => {
-  const flat = document.querySelector('input[name=layout]:checked').value === 'flat';
-  await fetch('/api/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flatLayout: flat }) });
+  await fetch('/api/start', { method: 'POST' });
   switchView('tag');
   initMap();
   await loadFavourites();

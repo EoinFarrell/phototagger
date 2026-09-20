@@ -24,7 +24,7 @@ go run . -dir ~/Pictures/to-fix
 This opens `http://localhost:8080` in your browser (disable with `-open=false`).
 On startup it:
 
-1. Refuses to run if `-dir` looks like the tool's own `-backup`/`-tagged` output
+1. Refuses to run if `-dir` looks like the tool's own `-backup` output
    (see [ADR-0004](docs/adr/0004-tagged-and-backup-as-siblings.md)).
 2. Recursively scans `-dir` for `.jpg`/`.jpeg`/`.heic`/`.heif` files.
 3. Backs up the whole directory to `<dir>-backup` once, if it doesn't already
@@ -32,9 +32,11 @@ On startup it:
 4. Serves a start screen with a scan summary, then the one-photo-at-a-time
    tagging UI.
 
-Applied photos are written in place with `exiftool`, renamed, and moved into
-`<dir>-tagged`. Quitting and re-running the same command later resumes where
-you left off -- the queue is just whatever's still in the source directory.
+Applied photos are written in place with `exiftool` and renamed in place --
+they never leave `-dir` ([ADR-0005](docs/adr/0005-tagged-in-place-by-filename.md)).
+Quitting and re-running the same command later resumes where you left off --
+the queue is just whatever in the source directory doesn't yet match the
+renamed (Tagged) filename pattern.
 
 `locations.json` (favourite locations) is shared across every `-dir` you point
 the tool at, and by default lives in whatever directory you run the command
@@ -55,7 +57,7 @@ After tagging, spot-check the output with:
 
 ```sh
 exiftool -G1 -a -s DateTimeOriginal OffsetTimeOriginal GPSLatitude GPSLongitude \
-  GPSAltitude Keywords ImageDescription Caption-Abstract ~/Pictures/to-fix-tagged/*
+  GPSAltitude Keywords ImageDescription Caption-Abstract ~/Pictures/to-fix/*
 ```
 
 See the Verification section of [`docs/plan.md`](docs/plan.md) for the full

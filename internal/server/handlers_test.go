@@ -19,7 +19,7 @@ func newTestMux(t *testing.T) http.Handler {
 	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
 		t.Fatal(err)
 	}
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 	return NewMux(sess)
 }
 
@@ -61,7 +61,7 @@ func TestHandleCurrentAndSkip(t *testing.T) {
 }
 
 func TestHandleApply_EndToEnd(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, true)
+	sess, source, _ := newTestSession(t)
 	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestHandleApply_EndToEnd(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
 	}
 
-	if _, err := os.Stat(filepath.Join(tagged, "20240714-143022.jpg")); err != nil {
+	if _, err := os.Stat(filepath.Join(source, "20240714-143022.jpg")); err != nil {
 		t.Errorf("expected applied file: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestHandleFavourites_GetAndPost(t *testing.T) {
 }
 
 func TestHandleElevation_GracefulFailure(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 	sess.elevation = fakeElevation{err: errNameRequired} // any error
 	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
 		t.Fatal(err)

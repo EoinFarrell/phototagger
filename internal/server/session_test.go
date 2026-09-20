@@ -88,12 +88,11 @@ func touch(t *testing.T, path string) {
 	}
 }
 
-func newTestSession(t *testing.T, flat bool) (*Session, string, string, *fakeExif) {
+func newTestSession(t *testing.T) (*Session, string, *fakeExif) {
 	t.Helper()
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
 	backup := filepath.Join(root, "source-backup")
-	tagged := filepath.Join(root, "source-tagged")
 
 	touch(t, filepath.Join(source, "a.jpg"))
 	touch(t, filepath.Join(source, "sub", "b.jpg"))
@@ -112,15 +111,15 @@ func newTestSession(t *testing.T, flat bool) (*Session, string, string, *fakeExi
 		t.Fatal(err)
 	}
 
-	sess, err := NewSession(source, backup, tagged, flat, result, exif, tz, geo, elev, locs)
+	sess, err := NewSession(source, backup, result, exif, tz, geo, elev, locs)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return sess, source, tagged, exif
+	return sess, source, exif
 }
 
 func TestSession_CurrentAndDone(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 
 	if got := sess.Total(); got != 2 {
 		t.Fatalf("Total() = %d, want 2", got)
@@ -147,7 +146,7 @@ func TestSession_CurrentAndDone(t *testing.T) {
 }
 
 func TestSession_SkipDoesNotTouchFilesystem(t *testing.T) {
-	sess, source, _, _ := newTestSession(t, true)
+	sess, source, _ := newTestSession(t)
 	before, _ := sess.Current()
 
 	sess.Skip()
@@ -158,7 +157,7 @@ func TestSession_SkipDoesNotTouchFilesystem(t *testing.T) {
 }
 
 func TestSession_Prev_UndoesSkip(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 	first, _ := sess.Current()
 
 	sess.Skip()
@@ -171,7 +170,7 @@ func TestSession_Prev_UndoesSkip(t *testing.T) {
 }
 
 func TestSession_Prev_NoopWhenNothingEarlier(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 	first, _ := sess.Current()
 
 	sess.Prev() // already at index 0
@@ -182,34 +181,38 @@ func TestSession_Prev_NoopWhenNothingEarlier(t *testing.T) {
 	}
 }
 
-func TestSession_Prev_SkipsOverAppliedPhotos(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+// TestSession_Prev_StepsBackIntoAppliedPhoto guards ADR-0005's change: since
+// Apply renames a photo in place instead of moving it out of the source
+// directory, there's nothing stopping Prev from stepping back into an
+// already-Applied photo to revisit or correct it.
+func TestSession_Prev_StepsBackIntoAppliedPhoto(t *testing.T) {
+	sess, _, _ := newTestSession(t)
 
 	req := ApplyRequest{DateTime: "2024-07-14T14:30:00"}
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
 	}
-	// Now at index 1 (last photo), index 0 already Applied and moved.
+	// Now at index 1 (last photo), index 0 already Applied but still in place.
 	sess.Prev()
 
 	cur, _ := sess.Current()
 	if cur.Done {
-		t.Fatal("expected the second photo still pending, not Done")
+		t.Fatal("expected the first (Applied) photo, not Done")
 	}
-	if cur.Index != 1 {
-		t.Errorf("Prev() should have been a no-op past an Applied photo, got index %d", cur.Index)
+	if cur.Index != 0 {
+		t.Errorf("Prev() should step back into the Applied photo, got index %d", cur.Index)
 	}
 }
 
 func TestSession_Apply_RequiresDateTime(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 	if _, err := sess.Apply(ApplyRequest{}); err == nil {
 		t.Fatal("expected error when dateTime is missing")
 	}
 }
 
 func TestSession_Apply_RequiresOffsetWhenDateTimeTouched(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", DateTimeTouched: true}
 	if _, err := sess.Apply(req); err == nil {
 		t.Fatal("expected error when datetime touched but offset missing")
@@ -217,7 +220,7 @@ func TestSession_Apply_RequiresOffsetWhenDateTimeTouched(t *testing.T) {
 }
 
 func TestSession_Apply_WritesOnlyTouchedFields(t *testing.T) {
-	sess, _, _, exif := newTestSession(t, true)
+	sess, _, exif := newTestSession(t)
 	first, _ := sess.Current()
 
 	caption := "A caption"
@@ -243,8 +246,8 @@ func TestSession_Apply_WritesOnlyTouchedFields(t *testing.T) {
 	_ = first
 }
 
-func TestSession_Apply_MovesAndRenamesFlat(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, true)
+func TestSession_Apply_RenamesInPlace(t *testing.T) {
+	sess, source, _ := newTestSession(t)
 
 	req := ApplyRequest{DateTime: "2024-07-14T14:30:22"}
 	res, err := sess.Apply(req)
@@ -252,7 +255,7 @@ func TestSession_Apply_MovesAndRenamesFlat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := filepath.Join(tagged, "20240714-143022.jpg")
+	want := filepath.Join(source, "20240714-143022.jpg")
 	if res.NewPath != want {
 		t.Errorf("NewPath = %q, want %q", res.NewPath, want)
 	}
@@ -261,8 +264,8 @@ func TestSession_Apply_MovesAndRenamesFlat(t *testing.T) {
 	}
 }
 
-func TestSession_Apply_NestedLayoutPreservesSubfolder(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, false)
+func TestSession_Apply_RenamesInPlaceWithinSubfolder(t *testing.T) {
+	sess, source, _ := newTestSession(t)
 
 	// First photo (a.jpg, top-level) then second (sub/b.jpg).
 	sess.Skip()
@@ -272,14 +275,14 @@ func TestSession_Apply_NestedLayoutPreservesSubfolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	want := filepath.Join(tagged, "sub", "20240714-143022.jpg")
+	want := filepath.Join(source, "sub", "20240714-143022.jpg")
 	if res.NewPath != want {
 		t.Errorf("NewPath = %q, want %q", res.NewPath, want)
 	}
 }
 
 func TestSession_Apply_SlugFromFavouriteName(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, true)
+	sess, source, _ := newTestSession(t)
 
 	lat, lon := 53.35, -6.26
 	req := ApplyRequest{
@@ -292,14 +295,14 @@ func TestSession_Apply_SlugFromFavouriteName(t *testing.T) {
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tagged, "20240714-143022_home.jpg")
+	want := filepath.Join(source, "20240714-143022_home.jpg")
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("expected %s to exist: %v", want, err)
 	}
 }
 
 func TestSession_Apply_SlugFromGeocodeWhenNoFavourite(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, true)
+	sess, source, _ := newTestSession(t)
 
 	lat, lon := 53.35, -6.26
 	req := ApplyRequest{
@@ -311,39 +314,88 @@ func TestSession_Apply_SlugFromGeocodeWhenNoFavourite(t *testing.T) {
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tagged, "20240714-143022_dublin.jpg")
+	want := filepath.Join(source, "20240714-143022_dublin.jpg")
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("expected %s to exist: %v", want, err)
 	}
 }
 
 func TestSession_Apply_NoSlugWhenNoLocation(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, true)
+	sess, source, _ := newTestSession(t)
 
 	req := ApplyRequest{DateTime: "2024-07-14T14:30:22"}
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tagged, "20240714-143022.jpg")
+	want := filepath.Join(source, "20240714-143022.jpg")
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("expected %s to exist: %v", want, err)
 	}
 }
 
 func TestSession_Apply_CollisionAppendsSuffix(t *testing.T) {
-	sess, _, tagged, _ := newTestSession(t, true)
+	sess, source, _ := newTestSession(t)
 
-	// Pre-create a file that will collide with the computed name.
-	touch(t, filepath.Join(tagged, "20240714-143022.jpg"))
+	// Pre-create a third file (not part of the queue) that will collide
+	// with the computed name.
+	touch(t, filepath.Join(source, "20240714-143022.jpg"))
 
 	req := ApplyRequest{DateTime: "2024-07-14T14:30:22"}
 	res, err := sess.Apply(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(tagged, "20240714-143022-01.jpg")
+	want := filepath.Join(source, "20240714-143022-01.jpg")
 	if res.NewPath != want {
 		t.Errorf("NewPath = %q, want %q", res.NewPath, want)
+	}
+}
+
+// TestSession_Apply_ReApplyDoesNotSelfCollide guards the exists-check
+// exclusion described in ADR-0005: re-Applying an already-Tagged photo with
+// an unchanged correction recomputes the same filename it already has, which
+// must not be treated as a collision against itself.
+func TestSession_Apply_ReApplyDoesNotSelfCollide(t *testing.T) {
+	sess, source, _ := newTestSession(t)
+
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:22"}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	sess.Prev()
+
+	res, err := sess.Apply(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(source, "20240714-143022.jpg")
+	if res.NewPath != want {
+		t.Errorf("NewPath = %q, want %q (unchanged correction must not append a collision suffix)", res.NewPath, want)
+	}
+}
+
+// TestSession_Apply_ReApplyRenamesWhenCorrectionChanges guards the other
+// half of re-Apply: a correction that actually changes the computed
+// filename renames the file again, and the old Tagged name no longer exists.
+func TestSession_Apply_ReApplyRenamesWhenCorrectionChanges(t *testing.T) {
+	sess, source, _ := newTestSession(t)
+
+	if _, err := sess.Apply(ApplyRequest{DateTime: "2024-07-14T14:30:22"}); err != nil {
+		t.Fatal(err)
+	}
+	sess.Prev()
+
+	res, err := sess.Apply(ApplyRequest{DateTime: "2024-07-14T15:00:00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(source, "20240714-150000.jpg")
+	if res.NewPath != want {
+		t.Errorf("NewPath = %q, want %q", res.NewPath, want)
+	}
+	if _, err := os.Stat(filepath.Join(source, "20240714-143022.jpg")); !os.IsNotExist(err) {
+		t.Errorf("expected old Tagged filename to no longer exist, stat err = %v", err)
 	}
 }
 
@@ -354,7 +406,7 @@ func TestSession_Apply_CollisionAppendsSuffix(t *testing.T) {
 // arriving in that window would read the *same* current photo, silently
 // duplicating or clobbering its write instead of being rejected outright.
 func TestSession_Apply_RejectsOverlappingApply(t *testing.T) {
-	sess, _, _, exif := newTestSession(t, true)
+	sess, _, exif := newTestSession(t)
 
 	var overlapCalled bool
 	var overlapErr error
@@ -385,7 +437,7 @@ func TestSession_Apply_RejectsOverlappingApply(t *testing.T) {
 }
 
 func TestSession_Apply_AdvancesQueueAndRemaining(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 
 	if got := sess.Remaining(); got != 2 {
 		t.Fatalf("Remaining() = %d, want 2", got)
@@ -399,7 +451,7 @@ func TestSession_Apply_AdvancesQueueAndRemaining(t *testing.T) {
 }
 
 func TestSession_Apply_PreviousValuesCascadeAcrossSkip(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 
 	lat, lon := 53.35, -6.26
 	req := ApplyRequest{
@@ -426,7 +478,7 @@ func TestSession_Apply_PreviousValuesCascadeAcrossSkip(t *testing.T) {
 }
 
 func TestSession_ResolveTimezoneAndElevation(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 
 	offset, zone, ok := sess.ResolveTimezone(53.35, -6.26, time.Now())
 	if !ok || offset != "+01:00" || zone != "Europe/Dublin" {
@@ -440,7 +492,7 @@ func TestSession_ResolveTimezoneAndElevation(t *testing.T) {
 }
 
 func TestSession_FavouritesRoundtrip(t *testing.T) {
-	sess, _, _, _ := newTestSession(t, true)
+	sess, _, _ := newTestSession(t)
 
 	if err := sess.AddFavourite(locations.Favourite{Name: "Home", Lat: 1, Lon: 2, Alt: 3}); err != nil {
 		t.Fatal(err)

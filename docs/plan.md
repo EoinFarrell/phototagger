@@ -33,21 +33,24 @@ form *is* the front-end for exiftool.
 
 ### Directory layout
 
-Given `-dir ~/Pictures/to-fix`, the app derives two sibling directories deterministically
+Given `-dir ~/Pictures/to-fix`, the app derives one sibling directory deterministically
 from that path — never nested inside it, so a recursive scan never walks into the tool's
 own output ([ADR-0004](adr/0004-tagged-and-backup-as-siblings.md)):
 
 - `~/Pictures/to-fix-backup/` — an exact, untouched mirror of the source directory,
   made once before anything else happens ([ADR-0001](adr/0001-whole-directory-backup.md)).
-- `~/Pictures/to-fix-tagged/` — where Applied photos land, laid out flat or mirroring
-  source subfolders per a homescreen toggle (default: flat).
+
+There is no separate tagged-output directory. Applied photos are renamed in place inside
+the source directory and never move — the rename pattern itself is what marks a photo as
+Tagged ([ADR-0005](adr/0005-tagged-in-place-by-filename.md)).
 
 **Misdirection safety check:** on startup, if `-dir` points at something matching the
-app's own `-backup`/`-tagged` naming convention, or whose files already match the
-tagged-file rename pattern (`YYYYMMDD-HHMMSS_slug.ext`), the app hard-refuses to start
-and names the directory it thinks you meant instead. This is a destructive-by-construction
-tool pointed at irreplaceable personal photos, so a wrong `-dir` fails loudly rather than
-quietly re-processing already-finished output.
+app's own `-backup` naming convention, the app hard-refuses to start and names the
+directory it thinks you meant instead. This is a destructive-by-construction tool
+pointed at irreplaceable personal photos, so a wrong `-dir` fails loudly rather than
+quietly re-processing the wrong thing. (Earlier versions also refused to start if any
+photo already matched the tagged-file rename pattern — dropped, since a mix of Tagged
+and Non-Tagged photos in `-dir` is now the normal, expected state of a resumed batch.)
 
 ### Start screen
 
@@ -55,27 +58,39 @@ Before the one-at-a-time UI opens, a start screen shows a recursive scan summary
 source directory: total applicable-photo count broken down by extension, subfolder
 count, and an expandable list (not just a count) of skipped/non-applicable files found
 along the way, so a misplaced screenshot or `.DS_Store` is visible before you begin. It
-also offers the flat-vs-nested toggle for `tagged/`'s layout.
+also offers a **Mode** choice — All / Non-Tagged / Tagged — with a count shown next to
+each option, telling the app which photos to include in this run's queue. Picking a
+Mode with zero matching photos is allowed; it just goes straight to the done state.
 
 Supported extensions: `.jpg`/`.jpeg`/`.heic`/`.heif`, case-insensitive. Anything else
 found during the recursive scan is listed in the summary but otherwise ignored.
 
 ### The queue
 
-The **queue** is simply whatever applicable photo files remain in the source directory
-tree — there's no separate database of progress. Order is one flat sequence across the
-whole recursive tree: sorted by existing `DateTimeOriginal` where present, falling back
-to filename. Because photos leave the source tree (into `tagged/`) only when Applied,
-restarting the app naturally resumes at the first remaining file in that order — no
-progress file needed.
+A photo is **Tagged** once its filename matches the pattern Apply produces
+(`YYYYMMDD-HHMMSS[_slug].ext`); otherwise it's **Non-Tagged**. This filename is the only
+record of tagging status — there's no separate progress database.
+
+The **queue** is the set of applicable photos matching the run's chosen Mode (All /
+Non-Tagged / Tagged), computed once at startup from a recursive scan of the source
+directory tree and then fixed for the rest of the run — it doesn't shrink, grow, or
+reorder as photos are Applied. Order is one flat sequence across the whole recursive
+tree: sorted by existing/corrected `DateTimeOriginal` where present, falling back to
+filename. Because Non-Tagged mode's queue is computed fresh from disk at each startup,
+restarting the app against the same `-dir` in Non-Tagged mode naturally resumes at the
+first not-yet-Tagged photo in that order — no progress file needed.
 
 - **Skip** only advances the in-memory pointer to the next photo; it never touches the
   filesystem. A skipped photo is untouched and will reappear in its normal place in the
-  order, whether later in the same session or on a future run.
+  order, whether later in the same session or on a future run. Skip means the same thing
+  regardless of Mode or whether the current photo is Tagged.
 - **Apply** always means "this photo is done, move on" — even if you touched zero
   fields (for photos that are already correct). It writes only the touched EXIF fields
-  (skipping the exiftool call entirely if nothing was touched), renames the file (see
-  below), and moves it into `tagged/`.
+  (skipping the exiftool call entirely if nothing was touched) and renames the file in
+  place (see below) — for the first time if the photo was Non-Tagged, or updating its
+  existing Tagged filename if the correction changes it. Since the queue is a fixed
+  snapshot for the run, Applying a photo doesn't remove it from view — Prev can still
+  step back to it.
 
 ### UI per photo
 
@@ -133,8 +148,10 @@ progress file needed.
 
 Corrected datetime and location data only exists once a photo has actually been tagged
 in the UI — so renaming happens per-photo, at Apply time, not as an upfront batch pass
-([ADR-0003](adr/0003-rename-at-apply-time.md)). Apply therefore does three things in
-one step: write EXIF, rename, move into `tagged/`.
+([ADR-0003](adr/0003-rename-at-apply-time.md)). Apply therefore does two things in one
+step: write EXIF, and rename in place inside the source directory
+([ADR-0005](adr/0005-tagged-in-place-by-filename.md)). The resulting filename doubles as
+the Tagged/Non-Tagged signal — see The queue, above.
 
 New filename: `YYYYMMDD-HHMMSS_<location-slug>.<ext>`, e.g.
 `20240714-143022_dublin.jpg`.
@@ -148,7 +165,9 @@ New filename: `YYYYMMDD-HHMMSS_<location-slug>.<ext>`, e.g.
   same graceful-degradation pattern as altitude and (partially) timezone.
 - **Collisions**: if two photos would otherwise get an identical name (e.g. burst
   shots), append `-01`, `-02`, etc. — only when actually needed, so the common case
-  stays clean.
+  stays clean. When re-Applying an already-Tagged photo, its own current filename is
+  excluded from the collision check, so an unchanged correction doesn't spuriously
+  collide with itself.
 - The original filename is not preserved anywhere in the new name; `backup/` already
   preserves the original file and its original name permanently, so that's the
   traceability mechanism, not the new filename.
@@ -183,14 +202,16 @@ common enough to build a dedicated control for.
    using a static offset).
 2. Confirm `backup/` is an exact untouched mirror of the original source directory
    before any edits happen, and is not re-copied on a second run.
-3. Inspect the output in `tagged/` with
+3. Inspect the (renamed, in-place) output in the source directory with
    `exiftool -G1 -a -s DateTimeOriginal OffsetTimeOriginal GPSLatitude GPSLongitude
    GPSAltitude Keywords ImageDescription Caption-Abstract` and confirm every field
    matches what was entered in the UI, `OffsetTime`/`OffsetTimeDigitized` were not
    written, and filenames follow the `YYYYMMDD-HHMMSS_slug` pattern with no collisions.
-4. Confirm resumability: stop the app mid-batch, restart it, and check it picks up
-   from the first untouched file rather than the beginning, and that `locations.json`
-   favourites survived the restart.
-5. Confirm the misdirection safety check: point `-dir` at the `tagged/` or `backup/`
-   sibling from step 2-4 and confirm the app hard-refuses to start.
+4. Confirm resumability: stop the app mid-batch, restart it in Non-Tagged mode, and
+   check it picks up from the first Non-Tagged file rather than the beginning, and that
+   `locations.json` favourites survived the restart. Then confirm Tagged and All modes
+   show the expected counts and let you re-edit an already-Tagged photo.
+5. Confirm the misdirection safety check: point `-dir` at the `backup/` sibling from
+   step 2-4 and confirm the app hard-refuses to start. Confirm pointing it back at the
+   (now partially Tagged) source directory does *not* refuse.
 6. Once confirmed on the test batch, run the app across the full 600-700 photos.

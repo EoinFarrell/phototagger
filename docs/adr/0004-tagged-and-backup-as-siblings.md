@@ -1,5 +1,9 @@
 # Backup and Tagged directories are siblings of Source, not nested inside it
 
+_Superseded by [ADR-0005](0005-tagged-in-place-by-filename.md): there is no more Tagged
+directory, since Apply now renames photos in place inside Source. The Backup-as-sibling
+reasoning below still holds._
+
 The original design nested `tagged/` inside the source directory being processed. Once
 the source scan became recursive, that would make the app walk into its own output on
 a second run and treat already-tagged photos as fresh input. Both `<source>-backup/`

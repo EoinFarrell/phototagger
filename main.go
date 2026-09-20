@@ -62,16 +62,16 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath string) error {
 	if err != nil {
 		return err
 	}
-	backupDir, taggedDir := dirs.Derive(absSource)
+	backupDir := dirs.Derive(absSource)
+
+	if err := safety.CheckMisdirection(absSource); err != nil {
+		return err
+	}
 
 	log.Printf("scanning %s...", absSource)
 	scanResult, err := scan.Scan(absSource)
 	if err != nil {
 		return fmt.Errorf("scanning %s: %w", absSource, err)
-	}
-
-	if err := safety.CheckMisdirection(absSource, scanResult.Photos); err != nil {
-		return err
 	}
 
 	log.Printf("found %d applicable photo(s), %d subfolder(s), %d skipped file(s)",
@@ -101,8 +101,7 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath string) error {
 
 	log.Printf("reading existing dates for %d photo(s) to establish tagging order...", len(scanResult.Photos))
 	sess, err := server.NewSession(
-		absSource, backupDir, taggedDir,
-		true, // flat tagged/ layout by default; changeable on the start screen
+		absSource, backupDir,
 		scanResult,
 		exiftool.New(),
 		tzoffset.New(tzFinder),

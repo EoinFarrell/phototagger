@@ -62,17 +62,15 @@ type lastValues struct {
 type Session struct {
 	mu sync.Mutex
 
-	SourceDir  string
-	BackupDir  string
-	TaggedDir  string
-	FlatLayout bool
+	SourceDir string
+	BackupDir string
 
 	ScanResult scan.Result
 
 	entries []queue.Entry
 	applied []bool
 	current int
-	busy    bool // true while an Apply is running (WriteFields/moveFile), to reject overlapping Applies
+	busy    bool // true while an Apply is running (WriteFields/rename), to reject overlapping Applies
 
 	exif      ExifClient
 	tz        TZResolver
@@ -87,8 +85,7 @@ type Session struct {
 // photo's existing DateTimeOriginal to establish queue order (see
 // internal/queue).
 func NewSession(
-	sourceDir, backupDir, taggedDir string,
-	flatLayout bool,
+	sourceDir, backupDir string,
 	scanResult scan.Result,
 	exif ExifClient,
 	tz TZResolver,
@@ -113,8 +110,6 @@ func NewSession(
 	return &Session{
 		SourceDir:  sourceDir,
 		BackupDir:  backupDir,
-		TaggedDir:  taggedDir,
-		FlatLayout: flatLayout,
 		ScanResult: scanResult,
 		entries:    queue.Order(entries),
 		applied:    make([]bool, len(entries)),
@@ -275,17 +270,15 @@ func (s *Session) Skip() {
 	}
 }
 
-// Prev steps back to the nearest earlier photo that hasn't been Applied
-// yet (an Applied photo has already left the source directory, so there's
-// nothing to go back to). It's a no-op if every earlier photo is Applied.
+// Prev steps back to the previous photo in the queue. Since Apply renames a
+// photo in place and never moves it out of the source directory, Prev can
+// step back into any earlier entry, including ones already Applied this run
+// (see ADR-0005) -- it's a no-op only at the start of the queue.
 func (s *Session) Prev() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := s.current - 1; i >= 0; i-- {
-		if !s.applied[i] {
-			s.current = i
-			return
-		}
+	if s.current > 0 {
+		s.current--
 	}
 }
 
@@ -293,8 +286,8 @@ func (s *Session) Prev() {
 // field carries the form's current effective value regardless of whether it
 // was edited; the Touched flags say whether exiftool should actually write
 // that group. DateTime/Offset/Lat/Lon are needed for renaming even when
-// untouched -- a photo that was already correct still gets renamed and
-// moved into tagged/ (see docs/plan.md's Queue section).
+// untouched -- a photo that was already correct still gets renamed in place
+// (see docs/plan.md's Queue section).
 type ApplyRequest struct {
 	DateTime        string `json:"dateTime"`
 	DateTimeTouched bool   `json:"dateTimeTouched"`
@@ -318,8 +311,8 @@ type ApplyResult struct {
 	NewPath string
 }
 
-// Apply writes the touched fields, renames the current photo, and moves it
-// into the tagged directory (see the Renaming section of docs/plan.md).
+// Apply writes the touched fields and renames the current photo in place,
+// inside the source directory (see the Renaming section of docs/plan.md).
 func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	s.mu.Lock()
 	if s.busy {
@@ -331,8 +324,6 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 		return ApplyResult{}, fmt.Errorf("nothing left to apply")
 	}
 	photo := s.entries[s.current].Photo
-	flat := s.FlatLayout
-	taggedDir := s.TaggedDir
 	s.busy = true
 	s.mu.Unlock()
 
@@ -376,23 +367,31 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	}
 
 	slug := s.resolveSlug(req)
-	destDir := taggedDir
-	if !flat {
-		destDir = filepath.Join(taggedDir, filepath.Dir(photo.RelPath))
-	}
+	destDir := filepath.Dir(photo.Path)
+	currentName := filepath.Base(photo.Path)
 
 	base := rename.Filename(dt, slug, photo.Ext)
+	// The exists-check excludes the photo's own current name, so an
+	// unchanged correction (re-Applying an already-Tagged photo with the
+	// same datetime/location) doesn't spuriously collide with itself.
 	name := rename.ResolveCollision(func(candidate string) bool {
+		if candidate == currentName {
+			return false
+		}
 		_, err := os.Stat(filepath.Join(destDir, candidate))
 		return err == nil
 	}, base)
 	destPath := filepath.Join(destDir, name)
 
-	if err := moveFile(photo.Path, destPath); err != nil {
-		return ApplyResult{}, err
+	if destPath != photo.Path {
+		if err := os.Rename(photo.Path, destPath); err != nil {
+			return ApplyResult{}, fmt.Errorf("renaming %s to %s: %w", photo.Path, destPath, err)
+		}
 	}
 
 	s.mu.Lock()
+	s.entries[s.current].Photo.Path = destPath
+	s.entries[s.current].Photo.RelPath = filepath.Join(filepath.Dir(photo.RelPath), name)
 	s.applied[s.current] = true
 	s.updateLastValues(req)
 	s.current++
