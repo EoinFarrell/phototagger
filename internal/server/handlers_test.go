@@ -40,6 +40,52 @@ func TestHandleState(t *testing.T) {
 	}
 }
 
+func TestHandleState_ReportsModeCounts(t *testing.T) {
+	mux := newTestMux(t)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+
+	var resp stateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture from newTestSession has 2 photos, both Non-Tagged.
+	if resp.Modes.All != 2 || resp.Modes.NonTagged != 2 || resp.Modes.Tagged != 0 {
+		t.Errorf("Modes = %+v, want {All:2 NonTagged:2 Tagged:0}", resp.Modes)
+	}
+}
+
+func TestHandleStart_BuildsQueueForRequestedMode(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]string{"mode": "tagged"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/start", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	// Both fixture photos are Non-Tagged, so Tagged mode's queue is empty.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/photo/current", nil))
+	var resp currentResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if !resp.Done {
+		t.Errorf("expected Done immediately after starting an empty mode, got %+v", resp)
+	}
+}
+
+func TestHandleStart_RejectsInvalidMode(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]string{"mode": "bogus"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/start", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
 func TestHandleCurrentAndSkip(t *testing.T) {
 	mux := newTestMux(t)
 

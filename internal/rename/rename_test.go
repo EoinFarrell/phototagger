@@ -59,6 +59,46 @@ func TestResolveCollision_Collisions(t *testing.T) {
 	}
 }
 
+func TestIsTagged(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		{"20240714-143022_dublin.jpg", true},
+		{"20240714-143022.jpg", true},
+		{"20240714-143022.HEIC", true},
+		{"20240714-143022-01_home.jpg", false}, // collision suffix breaks the \d{6} then _/. boundary
+		{"IMG_1234.jpg", false},
+		{"DSC00001.HEIC", false},
+		{"2024-07-14.jpg", false},
+		{"20240714-143022", false},
+	}
+	for _, c := range cases {
+		if got := IsTagged(c.name); got != c.want {
+			t.Errorf("IsTagged(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// TestIsTagged_MatchesFilename ties IsTagged directly to Filename's output
+// so the two can't silently drift apart if Filename's layout ever changes --
+// IsTagged doesn't derive its pattern from Filename, so nothing else
+// enforces they agree.
+func TestIsTagged_MatchesFilename(t *testing.T) {
+	dt := time.Date(2024, 7, 14, 14, 30, 22, 0, time.UTC)
+	cases := []struct{ slug, ext string }{
+		{"dublin", "jpg"},
+		{"", "jpg"},
+		{"dublin", "HEIC"},
+	}
+	for _, c := range cases {
+		name := Filename(dt, c.slug, c.ext)
+		if !IsTagged(name) {
+			t.Errorf("IsTagged(%q) = false, want true (Filename(%q, %q) produced this name)", name, c.slug, c.ext)
+		}
+	}
+}
+
 func TestResolveCollision_NoSlug(t *testing.T) {
 	taken := map[string]bool{"20240714-143022.jpg": true}
 	exists := func(name string) bool { return taken[name] }

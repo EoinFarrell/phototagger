@@ -11,6 +11,12 @@
 <section id="start-view" class="view">
   <h1>phototagger</h1>
   <div id="start-summary">Scanning…</div>
+  <fieldset id="mode-select">
+    <legend>Mode</legend>
+    <label><input type="radio" name="mode" value="non-tagged" checked> Non-Tagged (<span id="mode-count-non-tagged">0</span>)</label>
+    <label><input type="radio" name="mode" value="tagged"> Tagged (<span id="mode-count-tagged">0</span>)</label>
+    <label><input type="radio" name="mode" value="all"> All (<span id="mode-count-all">0</span>)</label>
+  </fieldset>
   <button id="start-button" disabled>Start tagging</button>
 </section>
 

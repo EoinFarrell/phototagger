@@ -61,6 +61,66 @@ func TestOrder_StableAndDoesNotMutateInput(t *testing.T) {
 	}
 }
 
+func TestParseMode(t *testing.T) {
+	valid := []Mode{ModeAll, ModeNonTagged, ModeTagged}
+	for _, m := range valid {
+		got, ok := ParseMode(string(m))
+		if !ok || got != m {
+			t.Errorf("ParseMode(%q) = %v, %v, want %v, true", m, got, ok, m)
+		}
+	}
+	if _, ok := ParseMode("bogus"); ok {
+		t.Error("ParseMode(\"bogus\") = true, want false")
+	}
+}
+
+func TestFilter_All_ReturnsEveryEntryUnfiltered(t *testing.T) {
+	entries := []Entry{
+		{Photo: scan.Photo{RelPath: "a.jpg"}, Tagged: true},
+		{Photo: scan.Photo{RelPath: "b.jpg"}, Tagged: false},
+	}
+	got := Filter(entries, ModeAll)
+	if len(got) != 2 {
+		t.Fatalf("Filter(ModeAll) len = %d, want 2", len(got))
+	}
+}
+
+func TestFilter_NonTagged_ExcludesTagged(t *testing.T) {
+	entries := []Entry{
+		{Photo: scan.Photo{RelPath: "a.jpg"}, Tagged: true},
+		{Photo: scan.Photo{RelPath: "b.jpg"}, Tagged: false},
+		{Photo: scan.Photo{RelPath: "c.jpg"}, Tagged: false},
+	}
+	got := Filter(entries, ModeNonTagged)
+	want := []string{"b.jpg", "c.jpg"}
+	if len(got) != len(want) {
+		t.Fatalf("Filter(ModeNonTagged) len = %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Photo.RelPath != w {
+			t.Errorf("position %d = %q, want %q", i, got[i].Photo.RelPath, w)
+		}
+	}
+}
+
+func TestFilter_Tagged_ExcludesNonTagged(t *testing.T) {
+	entries := []Entry{
+		{Photo: scan.Photo{RelPath: "a.jpg"}, Tagged: true},
+		{Photo: scan.Photo{RelPath: "b.jpg"}, Tagged: false},
+		{Photo: scan.Photo{RelPath: "c.jpg"}, Tagged: true},
+	}
+	got := Filter(entries, ModeTagged)
+	want := []string{"a.jpg", "c.jpg"}
+	if len(got) != len(want) {
+		t.Fatalf("Filter(ModeTagged) len = %d, want %d", len(got), len(want))
+	}
+	for i, w := range want {
+		if got[i].Photo.RelPath != w {
+			t.Errorf("position %d = %q, want %q", i, got[i].Photo.RelPath, w)
+		}
+	}
+}
+
 func TestOrder_TieBreakSameTimestamp(t *testing.T) {
 	same := dt("2024-07-14 12:00:00")
 	entries := []Entry{

@@ -67,6 +67,12 @@ type Session struct {
 
 	ScanResult scan.Result
 
+	// allEntries is every scanned photo, chronologically Ordered and
+	// classified Tagged/Non-Tagged, computed once at startup regardless of
+	// Mode -- it's what Counts() reports against and what Start() filters
+	// to build this run's fixed queue.
+	allEntries []queue.Entry
+
 	entries []queue.Entry
 	applied []bool
 	current int
@@ -83,7 +89,9 @@ type Session struct {
 
 // NewSession builds a Session from an already-completed scan, reading each
 // photo's existing DateTimeOriginal to establish queue order (see
-// internal/queue).
+// internal/queue) and classifying each as Tagged/Non-Tagged by filename.
+// The run's actual queue isn't built yet -- that happens once the start
+// screen's Mode choice reaches Start().
 func NewSession(
 	sourceDir, backupDir string,
 	scanResult scan.Result,
@@ -100,7 +108,7 @@ func NewSession(
 
 	entries := make([]queue.Entry, 0, len(scanResult.Photos))
 	for _, p := range scanResult.Photos {
-		entry := queue.Entry{Photo: p}
+		entry := queue.Entry{Photo: p, Tagged: rename.IsTagged(filepath.Base(p.RelPath))}
 		if dt, ok := dates[p.Path]; ok {
 			entry.DateTimeOriginal = &dt
 		}
@@ -111,14 +119,40 @@ func NewSession(
 		SourceDir:  sourceDir,
 		BackupDir:  backupDir,
 		ScanResult: scanResult,
-		entries:    queue.Order(entries),
-		applied:    make([]bool, len(entries)),
+		allEntries: queue.Order(entries),
 		exif:       exif,
 		tz:         tz,
 		geocoder:   geocoder,
 		elevation:  elevation,
 		locations:  locs,
 	}, nil
+}
+
+// Counts reports how many scanned photos match each Mode, for the start
+// screen (see docs/plan.md's Start screen section).
+func (s *Session) Counts() modeCounts {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	counts := modeCounts{All: len(s.allEntries)}
+	for _, e := range s.allEntries {
+		if e.Tagged {
+			counts.Tagged++
+		}
+	}
+	counts.NonTagged = counts.All - counts.Tagged
+	return counts
+}
+
+// Start builds this run's fixed queue: the subset of allEntries matching
+// mode, in the same chronological order (see CONTEXT.md's Queue
+// definition). Resets the current pointer and Applied tracking, so calling
+// it again (e.g. before any Apply) rebuilds the queue from scratch.
+func (s *Session) Start(mode queue.Mode) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = queue.Filter(s.allEntries, mode)
+	s.applied = make([]bool, len(s.entries))
+	s.current = 0
 }
 
 // dateReadBatchSize caps how many paths go into a single exiftool
@@ -153,14 +187,18 @@ func readDatesInBatches(exif ExifClient, photos []scan.Photo) (map[string]time.T
 	return dates, nil
 }
 
-// Total returns the number of photos found by the initial scan.
+// Total returns the number of photos in the current run's queue -- zero
+// until Start has built it (see Counts for the pre-Start, per-Mode scan
+// totals shown on the start screen).
 func (s *Session) Total() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.entries)
 }
 
-// Remaining returns how many photos have not yet been Applied.
+// Remaining returns how many photos in the current run's queue have not yet
+// been Applied -- zero (not "nothing left to do") until Start has built the
+// queue.
 func (s *Session) Remaining() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -53,11 +53,23 @@ async function loadState() {
       `<ul id="skipped-list">${data.skipped.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul></details>`;
   }
   $('start-summary').innerHTML = html;
+
+  const modes = data.modes || { all: 0, nonTagged: 0, tagged: 0 };
+  $('mode-count-all').textContent = modes.all;
+  $('mode-count-non-tagged').textContent = modes.nonTagged;
+  $('mode-count-tagged').textContent = modes.tagged;
+
+  // A Mode with zero matching photos is still a valid choice -- it just
+  // goes straight to the Done state -- so this only guards against there
+  // being nothing in the source directory at all.
   $('start-button').disabled = data.photoCount === 0;
 }
 
 $('start-button').addEventListener('click', async () => {
-  await fetch('/api/start', { method: 'POST' });
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  await fetch('/api/start', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }),
+  });
   switchView('tag');
   initMap();
   await loadFavourites();

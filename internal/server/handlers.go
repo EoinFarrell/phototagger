@@ -4,11 +4,13 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"time"
 
 	"phototagger/internal/locations"
+	"phototagger/internal/queue"
 )
 
 var errNameRequired = errors.New("name is required")
@@ -58,6 +60,14 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
+// modeCounts is how many scanned photos match each Mode, shown next to the
+// start screen's Mode choice (see docs/plan.md's Start screen section).
+type modeCounts struct {
+	All       int `json:"all"`
+	NonTagged int `json:"nonTagged"`
+	Tagged    int `json:"tagged"`
+}
+
 type stateResponse struct {
 	SourceDir      string         `json:"sourceDir"`
 	BackupDir      string         `json:"backupDir"`
@@ -67,6 +77,7 @@ type stateResponse struct {
 	Skipped        []string       `json:"skipped"`
 	Remaining      int            `json:"remaining"`
 	Total          int            `json:"total"`
+	Modes          modeCounts     `json:"modes"`
 }
 
 func handleState(sess *Session) http.HandlerFunc {
@@ -89,6 +100,7 @@ func handleState(sess *Session) http.HandlerFunc {
 			Skipped:        skipped,
 			Remaining:      sess.Remaining(),
 			Total:          sess.Total(),
+			Modes:          sess.Counts(),
 		})
 	}
 }
@@ -99,6 +111,19 @@ func handleStart(sess *Session) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		var req struct {
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		mode, ok := queue.ParseMode(req.Mode)
+		if !ok {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid mode %q", req.Mode))
+			return
+		}
+		sess.Start(mode)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }

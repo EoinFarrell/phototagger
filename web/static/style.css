@@ -84,6 +84,9 @@ label {
 
 #skipped-list { margin-top: 0.5rem; max-height: 8rem; overflow-y: auto; font-size: 0.85em; }
 
+#mode-select { display: flex; align-items: center; gap: 1.25rem; padding: 0.5rem 0.75rem; }
+#mode-select label { display: flex; align-items: center; gap: 0.3rem; margin: 0; font-weight: normal; }
+
 #save-favourite-row { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
 #save-favourite-row input { flex: 1; }
 

@@ -29,7 +29,19 @@ var (
 	nonAlnumRun    = regexp.MustCompile(`[^a-z0-9]+`)
 	dropChars      = regexp.MustCompile(`['’]`)
 	stripDiacritic = transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
+
+	// taggedPattern matches filenames Filename produces: YYYYMMDD-HHMMSS
+	// optionally followed by _slug, then an extension. A photo whose
+	// filename matches is Tagged, per CONTEXT.md.
+	taggedPattern = regexp.MustCompile(`^\d{8}-\d{6}(_[^.]+)?\.[A-Za-z0-9]+$`)
 )
+
+// IsTagged reports whether name -- a base filename, not a full path --
+// matches the pattern Filename produces, i.e. whether the photo it names is
+// Tagged.
+func IsTagged(name string) bool {
+	return taggedPattern.MatchString(name)
+}
 
 // Slugify turns a favourite name or reverse-geocoded place name into a
 // filename-safe, lowercase, hyphenated slug. Diacritics are stripped

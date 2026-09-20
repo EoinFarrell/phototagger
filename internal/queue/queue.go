@@ -11,10 +11,50 @@ import (
 	"phototagger/internal/scan"
 )
 
-// Entry pairs a scanned photo with its existing DateTimeOriginal, if any.
+// Entry pairs a scanned photo with its existing DateTimeOriginal, if any,
+// and whether its filename already matches the Tagged pattern (see
+// CONTEXT.md).
 type Entry struct {
 	Photo            scan.Photo
 	DateTimeOriginal *time.Time
+	Tagged           bool
+}
+
+// Mode selects which subset of a chronologically Ordered set of entries a
+// run's Queue includes -- see CONTEXT.md's Mode/Queue definitions.
+type Mode string
+
+const (
+	ModeAll       Mode = "all"
+	ModeNonTagged Mode = "non-tagged"
+	ModeTagged    Mode = "tagged"
+)
+
+// ParseMode validates a wire-format mode string.
+func ParseMode(s string) (Mode, bool) {
+	switch Mode(s) {
+	case ModeAll, ModeNonTagged, ModeTagged:
+		return Mode(s), true
+	default:
+		return "", false
+	}
+}
+
+// Filter returns the subset of entries matching mode, preserving relative
+// order. ModeAll returns every entry unfiltered -- a single chronological
+// interleave of Tagged and Non-Tagged together, per docs/plan.md.
+func Filter(entries []Entry, mode Mode) []Entry {
+	if mode == ModeAll {
+		return entries
+	}
+	want := mode == ModeTagged
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if e.Tagged == want {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // Order sorts entries into tagging order: photos with a known

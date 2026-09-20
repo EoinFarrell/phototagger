@@ -8,6 +8,7 @@ import (
 
 	"phototagger/internal/exiftool"
 	"phototagger/internal/locations"
+	"phototagger/internal/queue"
 	"phototagger/internal/scan"
 )
 
@@ -115,7 +116,132 @@ func newTestSession(t *testing.T) (*Session, string, *fakeExif) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every fixture photo above is Non-Tagged, so starting in Non-Tagged mode
+	// reproduces the pre-Mode-selector behavior these tests were written
+	// against.
+	sess.Start(queue.ModeNonTagged)
 	return sess, source, exif
+}
+
+// newTestSessionWithPhotos builds a Session (without calling Start) over a
+// source directory containing exactly the given filenames, for tests that
+// need control over which are Tagged vs Non-Tagged.
+func newTestSessionWithPhotos(t *testing.T, filenames ...string) (*Session, string) {
+	t.Helper()
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	backup := filepath.Join(root, "source-backup")
+
+	for _, name := range filenames {
+		touch(t, filepath.Join(source, name))
+	}
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs, err := locations.Load(filepath.Join(root, "locations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := NewSession(source, backup, result, newFakeExif(), fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sess, source
+}
+
+func TestSession_Counts_ReflectsTaggedAndNonTagged(t *testing.T) {
+	sess, _ := newTestSessionWithPhotos(t,
+		"IMG_0001.jpg",
+		"20240101-080000_home.jpg",
+		"20240102-090000.jpg",
+	)
+
+	got := sess.Counts()
+	want := modeCounts{All: 3, NonTagged: 1, Tagged: 2}
+	if got != want {
+		t.Errorf("Counts() = %+v, want %+v", got, want)
+	}
+}
+
+func TestSession_Start_FiltersByMode(t *testing.T) {
+	sess, _ := newTestSessionWithPhotos(t,
+		"IMG_0001.jpg",
+		"20240101-080000_home.jpg",
+		"20240102-090000.jpg",
+	)
+
+	cases := []struct {
+		mode queue.Mode
+		want int
+	}{
+		{queue.ModeTagged, 2},
+		{queue.ModeNonTagged, 1},
+		{queue.ModeAll, 3},
+	}
+	for _, c := range cases {
+		sess.Start(c.mode)
+		if got := sess.Total(); got != c.want {
+			t.Errorf("Total() after Start(%q) = %d, want %d", c.mode, got, c.want)
+		}
+	}
+}
+
+func TestSession_Start_EmptyModeGoesToDone(t *testing.T) {
+	// Both fixture photos below are Non-Tagged, so Tagged mode matches none.
+	sess, _ := newTestSessionWithPhotos(t, "a.jpg", "b.jpg")
+	sess.Start(queue.ModeTagged)
+
+	cur, err := sess.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cur.Done {
+		t.Fatal("expected Done when the selected mode matches zero photos")
+	}
+}
+
+// TestSession_Start_AllModeIsChronologicalInterleave guards that All mode
+// orders Tagged and Non-Tagged photos together by DateTimeOriginal, not
+// grouped by tagging status -- the filenames here are deliberately in the
+// opposite order from their EXIF dates so a filename-based sort would fail
+// this test.
+func TestSession_Start_AllModeIsChronologicalInterleave(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	backup := filepath.Join(root, "source-backup")
+
+	taggedPath := filepath.Join(source, "20240103-080000.jpg") // Tagged, filename sorts last
+	nonTaggedPath := filepath.Join(source, "a_earlier.jpg")    // Non-Tagged, filename sorts first
+	touch(t, taggedPath)
+	touch(t, nonTaggedPath)
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs, err := locations.Load(filepath.Join(root, "locations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exif := newFakeExif()
+	exif.dates[taggedPath] = time.Date(2024, 1, 3, 8, 0, 0, 0, time.UTC)
+	exif.dates[nonTaggedPath] = time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC) // earlier despite filename
+
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess.Start(queue.ModeAll)
+
+	first, err := sess.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.RelPath != "a_earlier.jpg" {
+		t.Errorf("first entry = %q, want the chronologically earliest photo (a_earlier.jpg) despite filename order", first.RelPath)
+	}
 }
 
 func TestSession_CurrentAndDone(t *testing.T) {
