@@ -18,8 +18,10 @@ class FakeClassList {
 }
 
 class FakeElement {
-  constructor(id) {
+  constructor(id, tagName = 'DIV', type) {
     this.id = id;
+    this.tagName = tagName;
+    if (type !== undefined) this.type = type;
     this._value = '';
     this.textContent = '';
     this.innerHTML = '';
@@ -39,33 +41,67 @@ class FakeElement {
   }
 }
 
+// Single source of truth for every stubbed element id, and (where it
+// matters) its tagName/type -- mirroring web/static/index.html closely
+// enough for the keyboard-shortcut guards (isFreeTextField/isFormControl in
+// app.js) to tell real form controls apart from everything else, the same
+// way a real DOM would. Ids with no entry here fall back to a plain DIV,
+// which is fine for elements the shortcut guards never inspect.
+const ELEMENT_META = {
+  'start-view': [], 'tag-view': [], 'done-view': [], 'start-summary': [],
+  'start-button': ['BUTTON'],
+  'favourite-select': ['SELECT'],
+  'save-favourite-button': ['BUTTON'],
+  'favourite-name-input': ['INPUT', 'text'],
+  'datetime-input': ['INPUT', 'datetime-local'],
+  'offset-input': ['INPUT', 'text'],
+  'altitude-input': ['INPUT', 'number'],
+  'keywords-input': ['INPUT', 'text'],
+  'caption-input': ['TEXTAREA'],
+  'additional-details': [], 'additional-required-badge': [],
+  'tag-progress': [], 'tag-relpath': [], 'preview-img': [],
+  'skip-button': ['BUTTON'],
+  'prev-button': ['BUTTON'],
+  'apply-button': ['BUTTON'],
+};
+
 function buildDom() {
   const elements = {};
-  const ids = [
-    'start-view', 'tag-view', 'done-view', 'start-summary', 'start-button',
-    'favourite-select', 'save-favourite-button', 'favourite-name-input',
-    'datetime-input', 'offset-input', 'altitude-input', 'keywords-input', 'caption-input',
-    'additional-details', 'additional-required-badge',
-    'tag-progress', 'tag-relpath', 'preview-img', 'skip-button', 'prev-button', 'apply-button',
-  ];
-  ids.forEach((id) => { elements[id] = new FakeElement(id); });
+  Object.keys(ELEMENT_META).forEach((id) => {
+    const [tagName, type] = ELEMENT_META[id];
+    elements[id] = new FakeElement(id, tagName, type);
+  });
 
   const sameAsPrevButtons = ['location', 'dateTime', 'keywords', 'caption'].map((g) => {
-    const el = new FakeElement(`same-prev-${g}`);
+    const el = new FakeElement(`same-prev-${g}`, 'BUTTON');
     el.dataset.group = g;
     return el;
   });
 
+  // Mirrors index.html's #mode-select radios (non-tagged checked by default)
+  // so app.js's `document.querySelector('input[name="mode"]:checked')` on
+  // Start resolves the same way it would against the real DOM.
+  const modeRadios = ['non-tagged', 'tagged', 'all'].map((value, i) => {
+    const el = new FakeElement(`mode-radio-${value}`, 'INPUT', 'radio');
+    el.name = 'mode';
+    el.value = value;
+    el.checked = i === 0;
+    return el;
+  });
+
+  const docListeners = {};
   const document = {
     getElementById: (id) => {
       if (!elements[id]) throw new Error(`no stub element for id="${id}"`);
       return elements[id];
     },
     querySelectorAll: (sel) => (sel === '.same-as-prev' ? sameAsPrevButtons : []),
-    querySelector: () => null,
+    querySelector: (sel) => (sel === 'input[name="mode"]:checked' ? (modeRadios.find((r) => r.checked) || null) : null),
+    addEventListener: (evt, cb) => { (docListeners[evt] = docListeners[evt] || []).push(cb); },
+    dispatchEvent: (evt) => { (docListeners[evt.type] || []).slice().forEach((cb) => cb(evt)); },
   };
 
-  return { document, elements, sameAsPrevButtons };
+  return { document, elements, sameAsPrevButtons, modeRadios };
 }
 
 // ---- Fake Leaflet ----
@@ -153,7 +189,7 @@ async function flushMicrotasks(n = 10) {
 
 function loadApp() {
   const src = fs.readFileSync(APP_JS, 'utf8');
-  const { document, elements } = buildDom();
+  const { document, elements, modeRadios } = buildDom();
   const { L, created } = buildFakeLeaflet();
   const fetchMock = buildFetchMock();
   const alerts = [];
@@ -169,11 +205,21 @@ function loadApp() {
   vm.createContext(sandbox);
   vm.runInContext(src, sandbox, { filename: APP_JS });
 
-  return { elements, fetchMock, alerts, created };
+  return { elements, fetchMock, alerts, created, document, modeRadios };
 }
 
 function click(el) {
   el.dispatchEvent({ type: 'click', target: el });
+}
+
+// Simulates a keydown bubbling up to the document, the same path app.js's
+// global keyboard-shortcut listener observes. `target` should be the
+// FakeElement that has focus (or omitted, mirroring focus sitting on
+// <body>/nothing in particular).
+function keydown(doc, key, target) {
+  let defaultPrevented = false;
+  doc.dispatchEvent({ type: 'keydown', key, target, preventDefault: () => { defaultPrevented = true; } });
+  return { defaultPrevented };
 }
 
 function photoResponse(index, existing) {
@@ -210,5 +256,5 @@ async function startSession() {
 
 module.exports = {
   buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
-  loadApp, click, photoResponse, startSession,
+  loadApp, click, keydown, photoResponse, startSession,
 };

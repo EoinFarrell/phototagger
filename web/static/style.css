@@ -1,11 +1,10 @@
-:root {
-  color-scheme: light dark;
-  --border: #8884;
-  --accent: #3567d6;
-}
+/* Pico CSS (linked in index.html, classless build) supplies typography,
+   spacing, form-control styling, and dark mode. Everything below is layout
+   or behavior Pico doesn't know about: this markup has no <main> wrapper
+   for Pico's own container sizing, the photo/form grid, the sticky footer
+   bar, map sizing, and the required-missing validation state. */
 
 body {
-  font-family: system-ui, sans-serif;
   max-width: 1100px;
   margin: 0 auto;
   padding: 1rem;
@@ -13,30 +12,12 @@ body {
 
 .view[hidden] { display: none; }
 
-fieldset {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  margin-bottom: 1rem;
-}
-
+/* Pico's own legend rule is display:block; this repo's legends each carry an
+   inline "same as previous" button that needs to sit on the same line. */
 legend {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-weight: 600;
-}
-
-.same-as-prev {
-  font-weight: normal;
-  font-size: 0.85em;
-  cursor: pointer;
-}
-
-.same-as-prev:disabled { opacity: 0.35; cursor: default; }
-
-label {
-  display: block;
-  margin: 0.4rem 0;
 }
 
 #tag-body {
@@ -46,15 +27,12 @@ label {
 }
 
 #preview-pane img {
-  max-width: 100%;
   max-height: 70vh;
   display: block;
-  border-radius: 6px;
 }
 
 #map {
   height: 420px;
-  border-radius: 6px;
   margin: 0.5rem 0;
 }
 
@@ -69,36 +47,34 @@ label {
 #tag-controls {
   position: sticky;
   bottom: 0;
-  background: Canvas;
+  background: var(--pico-background-color);
   padding: 0.75rem 0;
   display: flex;
   gap: 0.75rem;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--pico-muted-border-color);
 }
 
-#tag-controls button { flex: 1; padding: 0.6rem; font-size: 1rem; }
+#tag-controls button { flex: 1; }
 
-#apply-button { background: var(--accent); color: white; border: none; border-radius: 4px; }
+.same-as-prev {
+  font-weight: normal;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.same-as-prev:disabled { opacity: 0.35; cursor: default; }
 
 #offset-input.required-missing { outline: 2px solid #d63535; }
 
 #skipped-list { margin-top: 0.5rem; max-height: 8rem; overflow-y: auto; font-size: 0.85em; }
 
-#mode-select { display: flex; align-items: center; gap: 1.25rem; padding: 0.5rem 0.75rem; }
-#mode-select label { display: flex; align-items: center; gap: 0.3rem; margin: 0; font-weight: normal; }
+#mode-select { display: flex; align-items: center; gap: 1.25rem; }
+#mode-select label { display: flex; align-items: center; gap: 0.3rem; }
 
 #save-favourite-row { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
 #save-favourite-row input { flex: 1; }
 
-#additional-details {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.5rem 0.75rem;
-  margin-bottom: 1rem;
-}
-
-#additional-details summary { cursor: pointer; font-weight: 600; }
-
-#additional-details[open] summary { margin-bottom: 0.4rem; }
-
+/* #additional-details itself keeps no custom border/padding box -- like the
+   fieldsets above, it relies on Pico's own <details>/<summary> styling now.
+   Only the required-missing badge color is genuinely custom. */
 #additional-required-badge { color: #d63535; font-weight: normal; font-size: 0.85em; }

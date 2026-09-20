@@ -383,15 +383,66 @@ async function runNavigation(action, fetchFn) {
   }
 }
 
-$('skip-button').addEventListener('click', () =>
-  runNavigation('skip', () => fetch('/api/photo/skip', { method: 'POST' })));
+function doSkip() {
+  return runNavigation('skip', () => fetch('/api/photo/skip', { method: 'POST' }));
+}
 
-$('prev-button').addEventListener('click', () =>
-  runNavigation('go back', () => fetch('/api/photo/prev', { method: 'POST' })));
+function doPrev() {
+  return runNavigation('go back', () => fetch('/api/photo/prev', { method: 'POST' }));
+}
 
-$('apply-button').addEventListener('click', () =>
-  runNavigation('apply', () => fetch('/api/photo/apply', {
+function doApply() {
+  return runNavigation('apply', () => fetch('/api/photo/apply', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildApplyPayload()),
-  })));
+  }));
+}
+
+$('skip-button').addEventListener('click', doSkip);
+$('prev-button').addEventListener('click', doPrev);
+$('apply-button').addEventListener('click', doApply);
+
+// ---- Keyboard shortcuts ----
+
+// Enter already has a well-defined job on these -- inserting a newline/
+// continuing to type on a free-text field, or activating a focused <button>
+// (the native browser behavior for a focused button) -- so it must never be
+// hijacked into Apply there.
+function isFreeTextField(el) {
+  if (!el) return false;
+  return el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text');
+}
+
+function hasOwnEnterBehavior(el) {
+  return isFreeTextField(el) || !!(el && el.tagName === 'BUTTON');
+}
+
+// The dedicated Skip/Prev keys (ArrowRight/ArrowLeft) must defer to any
+// control with its own meaning for arrow keys: cursor movement in a text
+// field, or "change the selected option" in the favourite <select>.
+function ownsArrowKeys(el) {
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (busy || $('tag-view').hidden) return;
+
+  if (e.key === 'Enter') {
+    if (hasOwnEnterBehavior(e.target)) return;
+    e.preventDefault();
+    doApply();
+    return;
+  }
+
+  if (ownsArrowKeys(e.target)) return;
+
+  if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    doSkip();
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    doPrev();
+  }
+});
 
 loadState();
