@@ -40,6 +40,13 @@ class FakeElement {
   dispatchEvent(evt) {
     (this._listeners[evt.type] || []).slice().forEach((cb) => cb(evt));
   }
+  // Minimal stand-in for Element.closest -- this fake DOM never parses
+  // innerHTML into real child nodes, so it only ever matches itself. That's
+  // enough to drive app.js's event-delegated click target (see
+  // clickKeywordPill below), which is always the delegation target itself.
+  closest(selector) {
+    return this.classList.contains(selector.replace(/^\./, '')) ? this : null;
+  }
 }
 
 // Single source of truth for every stubbed element id, and (where it
@@ -50,6 +57,8 @@ class FakeElement {
 // which is fine for elements the shortcut guards never inspect.
 const ELEMENT_META = {
   'start-view': [], 'tag-view': [], 'done-view': [], 'start-summary': [],
+  'mode-count-all': [], 'mode-count-non-tagged': [], 'mode-count-tagged': [],
+  'geo-count-all': [], 'geo-count-missing-gps': [],
   'start-button': ['BUTTON'],
   'favourite-select': ['SELECT'],
   'save-favourite-button': ['BUTTON'],
@@ -58,6 +67,8 @@ const ELEMENT_META = {
   'offset-input': ['INPUT', 'text'],
   'altitude-input': ['INPUT', 'number'],
   'keywords-input': ['INPUT', 'text'],
+  'keyword-pills': [],
+  'keyword-locations-list': [],
   'caption-input': ['TEXTAREA'],
   'additional-details': [], 'additional-required-badge': [],
   'tag-progress': [], 'tag-relpath': [], 'preview-img': [],
@@ -90,6 +101,15 @@ function buildDom() {
     return el;
   });
 
+  // Mirrors index.html's #geo-select radios ("all" checked by default).
+  const geoRadios = ['all', 'missing-gps'].map((value, i) => {
+    const el = new FakeElement(`geo-radio-${value}`, 'INPUT', 'radio');
+    el.name = 'geo';
+    el.value = value;
+    el.checked = i === 0;
+    return el;
+  });
+
   const docListeners = {};
   const document = {
     getElementById: (id) => {
@@ -97,12 +117,16 @@ function buildDom() {
       return elements[id];
     },
     querySelectorAll: (sel) => (sel === '.same-as-prev' ? sameAsPrevButtons : []),
-    querySelector: (sel) => (sel === 'input[name="mode"]:checked' ? (modeRadios.find((r) => r.checked) || null) : null),
+    querySelector: (sel) => {
+      if (sel === 'input[name="mode"]:checked') return modeRadios.find((r) => r.checked) || null;
+      if (sel === 'input[name="geo"]:checked') return geoRadios.find((r) => r.checked) || null;
+      return null;
+    },
     addEventListener: (evt, cb) => { (docListeners[evt] = docListeners[evt] || []).push(cb); },
     dispatchEvent: (evt) => { (docListeners[evt.type] || []).slice().forEach((cb) => cb(evt)); },
   };
 
-  return { document, elements, sameAsPrevButtons, modeRadios };
+  return { document, elements, sameAsPrevButtons, modeRadios, geoRadios };
 }
 
 // ---- Fake Leaflet ----
@@ -191,16 +215,22 @@ async function flushMicrotasks(n = 10) {
 function loadApp() {
   const formStateSrc = fs.readFileSync(FORM_STATE_JS, 'utf8');
   const src = fs.readFileSync(APP_JS, 'utf8');
-  const { document, elements, modeRadios } = buildDom();
+  const { document, elements, modeRadios, geoRadios } = buildDom();
   const { L, created } = buildFakeLeaflet();
   const fetchMock = buildFetchMock();
   const alerts = [];
+  const confirms = [];
+  // deleteKeyword's confirm() gate defaults to "OK" so tests that don't care
+  // about the prompt (most of them) aren't forced to set this up -- tests
+  // covering the cancel path set it to false via the returned confirm object.
+  const confirmState = { result: true };
 
   const sandbox = {
     document,
     L,
     fetch: fetchMock,
     alert: (msg) => alerts.push(msg),
+    confirm: (msg) => { confirms.push(msg); return confirmState.result; },
     console,
     Date, JSON, Math, parseFloat, parseInt, Object, Array, Promise, setTimeout, clearTimeout, setImmediate,
   };
@@ -210,7 +240,7 @@ function loadApp() {
   vm.runInContext(formStateSrc, sandbox, { filename: FORM_STATE_JS });
   vm.runInContext(src, sandbox, { filename: APP_JS });
 
-  return { elements, fetchMock, alerts, created, document, modeRadios };
+  return { elements, fetchMock, alerts, confirms, confirmState, created, document, modeRadios, geoRadios };
 }
 
 // Loads formstate.js alone, without app.js or any DOM/Leaflet stubs, so its
@@ -230,6 +260,45 @@ function loadFormStateModule(sandboxExtra = {}) {
 
 function click(el) {
   el.dispatchEvent({ type: 'click', target: el });
+}
+
+// Simulates clicking a specific rendered keyword pill. app.js renders pills
+// into #keyword-pills' innerHTML (a plain string in this fake DOM, with no
+// real child elements to query), so this builds a stand-in target carrying
+// just what the delegated click handler reads off it -- the .keyword-pill
+// class and data-keyword -- and dispatches through the container exactly as
+// a real nested click would bubble.
+function clickKeywordPill(elements, keyword) {
+  const pill = new FakeElement(`keyword-pill-${keyword}`, 'BUTTON');
+  pill.classList.add('keyword-pill');
+  pill.dataset.keyword = keyword;
+  elements['keyword-pills'].dispatchEvent({ type: 'click', target: pill });
+}
+
+// Same as clickKeywordPill, but for a pill's × delete button.
+function clickKeywordDeletePill(elements, keyword) {
+  const btn = new FakeElement(`keyword-pill-delete-${keyword}`, 'BUTTON');
+  btn.classList.add('keyword-pill-delete');
+  btn.dataset.keyword = keyword;
+  elements['keyword-pills'].dispatchEvent({ type: 'click', target: btn });
+}
+
+// Simulates clicking a keyword-location-management row's "Set to current
+// pin" button -- same stand-in-target pattern as clickKeywordPill, for
+// app.js's #keyword-locations-list delegated click handler.
+function clickKeywordLocationSet(elements, keyword) {
+  const btn = new FakeElement(`kw-loc-set-${keyword}`, 'BUTTON');
+  btn.classList.add('kw-loc-set');
+  btn.dataset.keyword = keyword;
+  elements['keyword-locations-list'].dispatchEvent({ type: 'click', target: btn });
+}
+
+// Same as clickKeywordLocationSet, but for a row's "Clear" button.
+function clickKeywordLocationClear(elements, keyword) {
+  const btn = new FakeElement(`kw-loc-clear-${keyword}`, 'BUTTON');
+  btn.classList.add('kw-loc-clear');
+  btn.dataset.keyword = keyword;
+  elements['keyword-locations-list'].dispatchEvent({ type: 'click', target: btn });
 }
 
 // Simulates a keydown bubbling up to the document, the same path app.js's
@@ -268,6 +337,8 @@ async function startSession() {
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/favourites', []);
   await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', []);
+  await flushMicrotasks();
   fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
   await flushMicrotasks();
 
@@ -276,5 +347,6 @@ async function startSession() {
 
 module.exports = {
   buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
-  loadApp, loadFormStateModule, click, keydown, photoResponse, startSession,
+  loadApp, loadFormStateModule, click, clickKeywordPill, clickKeywordDeletePill,
+  clickKeywordLocationSet, clickKeywordLocationClear, keydown, photoResponse, startSession,
 };

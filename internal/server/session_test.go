@@ -3,10 +3,12 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	"phototagger/internal/exiftool"
+	"phototagger/internal/keywords"
 	"phototagger/internal/locations"
 	"phototagger/internal/queue"
 	"phototagger/internal/scan"
@@ -14,6 +16,8 @@ import (
 
 type fakeExif struct {
 	dates    map[string]time.Time
+	keywords map[string][]string
+	hasGPS   map[string]bool
 	existing map[string]exiftool.Existing
 	written  map[string]exiftool.Fields
 	previews map[string][]byte
@@ -22,11 +26,22 @@ type fakeExif struct {
 	// second Apply call arriving while the first is still mid-flight (see
 	// TestSession_Apply_RejectsOverlappingApply).
 	onWrite func()
+
+	// removedKeywordCalls records each RemoveKeywordBatch call, in order,
+	// for TestSession_DeleteKeyword assertions.
+	removedKeywordCalls []removeKeywordCall
+}
+
+type removeKeywordCall struct {
+	paths []string
+	kw    string
 }
 
 func newFakeExif() *fakeExif {
 	return &fakeExif{
 		dates:    map[string]time.Time{},
+		keywords: map[string][]string{},
+		hasGPS:   map[string]bool{},
 		existing: map[string]exiftool.Existing{},
 		written:  map[string]exiftool.Fields{},
 		previews: map[string][]byte{},
@@ -38,6 +53,24 @@ func (f *fakeExif) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Ti
 	for _, p := range paths {
 		if dt, ok := f.dates[p]; ok {
 			out[p] = dt
+		}
+	}
+	return out, nil
+}
+func (f *fakeExif) ReadKeywordsBatch(paths []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(paths))
+	for _, p := range paths {
+		if kws, ok := f.keywords[p]; ok {
+			out[p] = kws
+		}
+	}
+	return out, nil
+}
+func (f *fakeExif) ReadGPSPresenceBatch(paths []string) (map[string]bool, error) {
+	out := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if has, ok := f.hasGPS[p]; ok {
+			out[p] = has
 		}
 	}
 	return out, nil
@@ -54,6 +87,10 @@ func (f *fakeExif) WriteFields(path string, fields exiftool.Fields) error {
 }
 func (f *fakeExif) ExtractPreview(path string) ([]byte, error) {
 	return f.previews[path], nil
+}
+func (f *fakeExif) RemoveKeywordBatch(paths []string, kw string) error {
+	f.removedKeywordCalls = append(f.removedKeywordCalls, removeKeywordCall{paths: paths, kw: kw})
+	return nil
 }
 
 type fakeTZ struct {
@@ -111,15 +148,19 @@ func newTestSession(t *testing.T) (*Session, string, *fakeExif) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	sess, err := NewSession(source, backup, result, exif, tz, geo, elev, locs)
+	sess, err := NewSession(source, backup, result, exif, tz, geo, elev, locs, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Every fixture photo above is Non-Tagged, so starting in Non-Tagged mode
 	// reproduces the pre-Mode-selector behavior these tests were written
 	// against.
-	sess.Start(queue.ModeNonTagged)
+	sess.Start(queue.ModeNonTagged, queue.GeoAll)
 	return sess, source, exif
 }
 
@@ -144,7 +185,11 @@ func newTestSessionWithPhotos(t *testing.T, filenames ...string) (*Session, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := NewSession(source, backup, result, newFakeExif(), fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs)
+	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := NewSession(source, backup, result, newFakeExif(), fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +210,62 @@ func TestSession_Counts_ReflectsTaggedAndNonTagged(t *testing.T) {
 	}
 }
 
+// TestSession_GeoCounts_And_Start_FiltersByGeo guards that the Geo axis is
+// independent of Mode (see CONTEXT.md's Mode definition, which is strictly
+// about Tagged/Non-Tagged) and still ANDs with whichever Mode is selected.
+func TestSession_GeoCounts_And_Start_FiltersByGeo(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	backup := filepath.Join(root, "source-backup")
+
+	// a.jpg: Tagged, has GPS. b.jpg: Non-Tagged, missing GPS. c.jpg:
+	// Non-Tagged, missing GPS. So Mode and Geo cut across each other.
+	touch(t, filepath.Join(source, "20240101-080000.jpg"))
+	touch(t, filepath.Join(source, "b.jpg"))
+	touch(t, filepath.Join(source, "c.jpg"))
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs, err := locations.Load(filepath.Join(root, "locations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exif := newFakeExif()
+	exif.hasGPS[filepath.Join(source, "20240101-080000.jpg")] = true
+
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gotGeo := sess.GeoCounts()
+	wantGeo := geoCounts{All: 3, MissingGPS: 2}
+	if gotGeo != wantGeo {
+		t.Errorf("GeoCounts() = %+v, want %+v", gotGeo, wantGeo)
+	}
+
+	sess.Start(queue.ModeAll, queue.GeoMissingGPS)
+	if got := sess.Total(); got != 2 {
+		t.Errorf("Total() after Start(All, MissingGPS) = %d, want 2", got)
+	}
+
+	sess.Start(queue.ModeNonTagged, queue.GeoMissingGPS)
+	if got := sess.Total(); got != 2 {
+		t.Errorf("Total() after Start(NonTagged, MissingGPS) = %d, want 2 (both missing-GPS photos are also Non-Tagged)", got)
+	}
+
+	sess.Start(queue.ModeTagged, queue.GeoMissingGPS)
+	if got := sess.Total(); got != 0 {
+		t.Errorf("Total() after Start(Tagged, MissingGPS) = %d, want 0 (the only Tagged photo has GPS)", got)
+	}
+}
+
 func TestSession_Start_FiltersByMode(t *testing.T) {
 	sess, _ := newTestSessionWithPhotos(t,
 		"IMG_0001.jpg",
@@ -181,7 +282,7 @@ func TestSession_Start_FiltersByMode(t *testing.T) {
 		{queue.ModeAll, 3},
 	}
 	for _, c := range cases {
-		sess.Start(c.mode)
+		sess.Start(c.mode, queue.GeoAll)
 		if got := sess.Total(); got != c.want {
 			t.Errorf("Total() after Start(%q) = %d, want %d", c.mode, got, c.want)
 		}
@@ -191,7 +292,7 @@ func TestSession_Start_FiltersByMode(t *testing.T) {
 func TestSession_Start_EmptyModeGoesToDone(t *testing.T) {
 	// Both fixture photos below are Non-Tagged, so Tagged mode matches none.
 	sess, _ := newTestSessionWithPhotos(t, "a.jpg", "b.jpg")
-	sess.Start(queue.ModeTagged)
+	sess.Start(queue.ModeTagged, queue.GeoAll)
 
 	cur, err := sess.Current()
 	if err != nil {
@@ -225,15 +326,19 @@ func TestSession_Start_AllModeIsChronologicalInterleave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	exif := newFakeExif()
 	exif.dates[taggedPath] = time.Date(2024, 1, 3, 8, 0, 0, 0, time.UTC)
 	exif.dates[nonTaggedPath] = time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC) // earlier despite filename
 
-	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs)
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess.Start(queue.ModeAll)
+	sess.Start(queue.ModeAll, queue.GeoAll)
 
 	first, err := sess.Current()
 	if err != nil {
@@ -617,6 +722,63 @@ func TestSession_ResolveTimezoneAndElevation(t *testing.T) {
 	}
 }
 
+func TestSession_DeleteKeyword_RemovesFromKnownListAndUsesPostRenamePaths(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+
+	// Applying a.jpg renames it on disk (fixture photos start as a.jpg/b.jpg,
+	// see newTestSession) -- allEntries still holds a.jpg's pre-rename path
+	// afterwards (see DeleteKeyword's doc comment on why it re-scans instead
+	// of reading allEntries).
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.DeleteKeyword("beach"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sess.Keywords(); len(got) != 0 {
+		t.Errorf("expected \"beach\" removed from known-keywords list, got %+v", got)
+	}
+
+	if len(exif.removedKeywordCalls) != 1 {
+		t.Fatalf("expected one RemoveKeywordBatch call, got %d", len(exif.removedKeywordCalls))
+	}
+	call := exif.removedKeywordCalls[0]
+	if call.kw != "beach" {
+		t.Errorf("got kw %q, want %q", call.kw, "beach")
+	}
+	for _, p := range call.paths {
+		if filepath.Base(p) == "a.jpg" {
+			t.Errorf("RemoveKeywordBatch called with a.jpg's stale pre-rename path %q", p)
+		}
+	}
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, len(result.Photos))
+	for i, p := range result.Photos {
+		want[i] = p.Path
+	}
+	if !reflect.DeepEqual(call.paths, want) {
+		t.Errorf("RemoveKeywordBatch paths = %+v, want current on-disk scan %+v", call.paths, want)
+	}
+}
+
+func TestSession_DeleteKeyword_UnknownKeywordIsNoop(t *testing.T) {
+	sess, _, exif := newTestSession(t)
+
+	if err := sess.DeleteKeyword("never-used"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exif.removedKeywordCalls) != 1 {
+		t.Fatalf("expected RemoveKeywordBatch to still be called (it's safe against photos without the keyword), got %d calls", len(exif.removedKeywordCalls))
+	}
+}
+
 func TestSession_FavouritesRoundtrip(t *testing.T) {
 	sess, _, _ := newTestSession(t)
 
@@ -626,5 +788,80 @@ func TestSession_FavouritesRoundtrip(t *testing.T) {
 	favs := sess.Favourites()
 	if len(favs) != 1 || favs[0].Name != "Home" {
 		t.Errorf("Favourites() = %+v", favs)
+	}
+}
+
+func TestSession_SetAndClearKeywordLocation(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"concert"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	loc := keywords.Location{Lat: 40.7128, Lon: -74.006, Alt: 10}
+	if err := sess.SetKeywordLocation("concert", loc); err != nil {
+		t.Fatalf("SetKeywordLocation: %v", err)
+	}
+	got := sess.Keywords()
+	if len(got) != 1 || got[0].Location == nil || *got[0].Location != loc {
+		t.Fatalf("Keywords() = %+v, want concert carrying %+v", got, loc)
+	}
+
+	if err := sess.ClearKeywordLocation("concert"); err != nil {
+		t.Fatalf("ClearKeywordLocation: %v", err)
+	}
+	got = sess.Keywords()
+	if len(got) != 1 || got[0].Location != nil {
+		t.Errorf("Keywords() = %+v, want Location cleared", got)
+	}
+}
+
+func TestSession_SetKeywordLocation_UnknownKeywordErrors(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+
+	if err := sess.SetKeywordLocation("never-used", keywords.Location{Lat: 1, Lon: 2}); err == nil {
+		t.Fatal("expected error setting location on an unknown keyword")
+	}
+}
+
+func TestNewSession_SeedsKeywordsFromExistingPhotos(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	backup := filepath.Join(root, "source-backup")
+
+	touch(t, filepath.Join(source, "a.jpg"))
+	touch(t, filepath.Join(source, "b.jpg"))
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exif := newFakeExif()
+	exif.keywords[filepath.Join(source, "a.jpg")] = []string{"beach", "family"}
+	exif.keywords[filepath.Join(source, "b.jpg")] = []string{"family", "sunset"}
+
+	locs, err := locations.Load(filepath.Join(root, "locations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := make([]string, len(sess.Keywords()))
+	for i, k := range sess.Keywords() {
+		got[i] = k.Name
+	}
+	want := []string{"beach", "family", "sunset"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Keywords() names = %+v, want %+v", got, want)
 	}
 }

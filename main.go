@@ -21,6 +21,7 @@ import (
 	"phototagger/internal/elevation"
 	"phototagger/internal/exiftool"
 	"phototagger/internal/geocode"
+	"phototagger/internal/keywords"
 	"phototagger/internal/locations"
 	"phototagger/internal/safety"
 	"phototagger/internal/scan"
@@ -41,6 +42,8 @@ func main() {
 	open := flag.Bool("open", true, "open the tagging UI in your default browser on startup")
 	locationsPath := flag.String("locations", "locations.json",
 		"path to the favourites file, shared across every -dir invocation (relative paths resolve against the current directory, so run phototagger from the same place each time, or pass an absolute path)")
+	keywordsPath := flag.String("keywords", "keywords.json",
+		"path to the previously-used-keywords file, shared across every -dir invocation (relative paths resolve against the current directory, so run phototagger from the same place each time, or pass an absolute path)")
 	flag.Parse()
 
 	if *dir == "" {
@@ -48,12 +51,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*dir, *addr, *open, *locationsPath); err != nil {
+	if err := run(*dir, *addr, *open, *locationsPath, *keywordsPath); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(sourceDir, addr string, openBrowser bool, locationsPath string) error {
+func run(sourceDir, addr string, openBrowser bool, locationsPath, keywordsPath string) error {
 	if err := exiftool.CheckAvailable(); err != nil {
 		return err
 	}
@@ -99,7 +102,12 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath string) error {
 		return fmt.Errorf("loading %s: %w", locationsPath, err)
 	}
 
-	log.Printf("reading existing dates for %d photo(s) to establish tagging order...", len(scanResult.Photos))
+	kws, err := keywords.Load(keywordsPath)
+	if err != nil {
+		return fmt.Errorf("loading %s: %w", keywordsPath, err)
+	}
+
+	log.Printf("reading existing dates and keywords for %d photo(s)...", len(scanResult.Photos))
 	sess, err := server.NewSession(
 		absSource, backupDir,
 		scanResult,
@@ -108,6 +116,7 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath string) error {
 		geocode.New(),
 		elevation.New(),
 		locs,
+		kws,
 	)
 	if err != nil {
 		return fmt.Errorf("building session: %w", err)

@@ -8,11 +8,13 @@ import (
 	"io/fs"
 	"net/http"
 
+	"phototagger/internal/keywords"
 	"phototagger/internal/locations"
 	"phototagger/internal/queue"
 )
 
 var errNameRequired = errors.New("name is required")
+var errKeywordRequired = errors.New("keyword is required")
 
 // WebFS is the embedded static frontend, set by main via SetWebFS.
 var webFS fs.FS
@@ -43,6 +45,8 @@ func NewMux(sess *Session) http.Handler {
 	mux.HandleFunc("/api/photo/skip", handleSkip(sess))
 	mux.HandleFunc("/api/photo/prev", handlePrev(sess))
 	mux.HandleFunc("/api/favourites", handleFavourites(sess))
+	mux.HandleFunc("/api/keywords", handleKeywords(sess))
+	mux.HandleFunc("/api/keywords/location", handleKeywordLocation(sess))
 	mux.HandleFunc("/api/elevation", handleElevation(sess))
 	mux.HandleFunc("/api/timezone", handleTimezone(sess))
 
@@ -67,6 +71,14 @@ type modeCounts struct {
 	Tagged    int `json:"tagged"`
 }
 
+// geoCounts is how many scanned photos match each Geo filter, shown next to
+// the start screen's Geo choice. Independent of modeCounts -- see
+// Session.GeoCounts.
+type geoCounts struct {
+	All        int `json:"all"`
+	MissingGPS int `json:"missingGps"`
+}
+
 type stateResponse struct {
 	SourceDir      string         `json:"sourceDir"`
 	BackupDir      string         `json:"backupDir"`
@@ -77,6 +89,7 @@ type stateResponse struct {
 	Remaining      int            `json:"remaining"`
 	Total          int            `json:"total"`
 	Modes          modeCounts     `json:"modes"`
+	Geo            geoCounts      `json:"geo"`
 }
 
 func handleState(sess *Session) http.HandlerFunc {
@@ -100,6 +113,7 @@ func handleState(sess *Session) http.HandlerFunc {
 			Remaining:      sess.Remaining(),
 			Total:          sess.Total(),
 			Modes:          sess.Counts(),
+			Geo:            sess.GeoCounts(),
 		})
 	}
 }
@@ -112,6 +126,7 @@ func handleStart(sess *Session) http.HandlerFunc {
 		}
 		var req struct {
 			Mode string `json:"mode"`
+			Geo  string `json:"geo"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -122,7 +137,12 @@ func handleStart(sess *Session) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid mode %q", req.Mode))
 			return
 		}
-		sess.Start(mode)
+		geo, ok := queue.ParseGeoFilter(req.Geo)
+		if !ok {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid geo %q", req.Geo))
+			return
+		}
+		sess.Start(mode, geo)
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	}
 }
@@ -284,6 +304,83 @@ func handleFavourites(sess *Session) http.HandlerFunc {
 				return
 			}
 			writeJSON(w, http.StatusOK, sess.Favourites())
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleKeywords(sess *Session) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			writeJSON(w, http.StatusOK, sess.Keywords())
+		case http.MethodDelete:
+			var req struct {
+				Keyword string `json:"keyword"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if req.Keyword == "" {
+				writeError(w, http.StatusBadRequest, errKeywordRequired)
+				return
+			}
+			if err := sess.DeleteKeyword(req.Keyword); err != nil {
+				writeError(w, http.StatusInternalServerError, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, sess.Keywords())
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+// handleKeywordLocation sets (POST) or clears (DELETE) a known keyword's
+// saved Location (see internal/keywords.Store.SetLocation and
+// web/static/app.js's keyword-location management section).
+func handleKeywordLocation(sess *Session) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			var req struct {
+				Keyword string  `json:"keyword"`
+				Lat     float64 `json:"lat"`
+				Lon     float64 `json:"lon"`
+				Alt     float64 `json:"alt"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if req.Keyword == "" {
+				writeError(w, http.StatusBadRequest, errKeywordRequired)
+				return
+			}
+			if err := sess.SetKeywordLocation(req.Keyword, keywords.Location{Lat: req.Lat, Lon: req.Lon, Alt: req.Alt}); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, sess.Keywords())
+		case http.MethodDelete:
+			var req struct {
+				Keyword string `json:"keyword"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if req.Keyword == "" {
+				writeError(w, http.StatusBadRequest, errKeywordRequired)
+				return
+			}
+			if err := sess.ClearKeywordLocation(req.Keyword); err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, sess.Keywords())
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}

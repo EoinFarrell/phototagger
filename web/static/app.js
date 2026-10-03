@@ -2,6 +2,7 @@
 
 let map, marker;
 let favourites = [];
+let knownKeywords = [];
 let previousData = {};
 let selectedFavouriteName = '';
 let offsetManuallyEdited = false;
@@ -53,6 +54,10 @@ async function loadState() {
   $('mode-count-non-tagged').textContent = modes.nonTagged;
   $('mode-count-tagged').textContent = modes.tagged;
 
+  const geo = data.geo || { all: 0, missingGps: 0 };
+  $('geo-count-all').textContent = geo.all;
+  $('geo-count-missing-gps').textContent = geo.missingGps;
+
   // A Mode with zero matching photos is still a valid choice -- it just
   // goes straight to the Done state -- so this only guards against there
   // being nothing in the source directory at all.
@@ -61,12 +66,14 @@ async function loadState() {
 
 $('start-button').addEventListener('click', async () => {
   const mode = document.querySelector('input[name="mode"]:checked').value;
+  const geo = document.querySelector('input[name="geo"]:checked').value;
   await fetch('/api/start', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode }),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, geo }),
   });
   switchView('tag');
   initMap();
   await loadFavourites();
+  await loadKeywords();
   const res = await fetch('/api/photo/current');
   renderCurrent(await res.json());
 });
@@ -210,6 +217,208 @@ $('save-favourite-button').addEventListener('click', formState.guarded(async () 
   $('favourite-name-input').value = '';
 }));
 
+// ---- Keywords ----
+
+async function loadKeywords() {
+  const res = await fetch('/api/keywords');
+  knownKeywords = await res.json();
+  renderKeywordPills();
+  renderKeywordLocations();
+}
+
+function findKnownKeyword(kw) {
+  return knownKeywords.find((k) => k.name === kw);
+}
+
+// Pills double as a legend for what's already in the field: one already
+// present in keywords-input renders .active, and clicking it again removes
+// it from the field (toggle), keeping the pill and the field in sync. Each
+// pill pairs with a small × button that deletes the keyword everywhere
+// (see deleteKeyword) rather than just from this photo. A keyword carrying
+// a saved Location (see renderKeywordLocations below) gets a pin marker, so
+// it's visible before clicking that doing so will also move the map.
+function renderKeywordPills() {
+  const current = new Set(parseKeywords($('keywords-input').value));
+  $('keyword-pills').innerHTML = knownKeywords.map((kw) => {
+    const active = current.has(kw.name) ? ' active' : '';
+    const esc = escapeHtml(kw.name);
+    const pin = kw.location ? '📍 ' : '';
+    return `<span class="keyword-pill-group">` +
+      `<button type="button" class="keyword-pill${active}" data-keyword="${esc}">${pin}${esc}</button>` +
+      `<button type="button" class="keyword-pill-delete${active}" data-keyword="${esc}" title="Delete “${esc}” from every photo in this folder" aria-label="Delete ${esc}">×</button>` +
+      `</span>`;
+  }).join('');
+}
+
+// Adding a keyword that carries a saved Location also snaps the map to it,
+// mirroring the favourite-select change handler -- but only on add:
+// clicking an already-active pill to remove it leaves the map untouched,
+// since removing a keyword says nothing about where the photo actually is.
+function toggleKeyword(kw) {
+  const current = parseKeywords($('keywords-input').value);
+  const idx = current.indexOf(kw);
+  if (idx === -1) {
+    current.push(kw);
+    const known = findKnownKeyword(kw);
+    if (known && known.location) {
+      const loc = known.location;
+      formState.applyProgrammaticUpdate(() => setMarker(loc.lat, loc.lon));
+      formState.invalidateElevation();
+      $('altitude-input').value = loc.alt;
+      $('favourite-select').value = '';
+      selectedFavouriteName = '';
+      offsetManuallyEdited = false;
+      formState.touch('location');
+      maybeResolveTimezone();
+    }
+  } else {
+    current.splice(idx, 1);
+  }
+  $('keywords-input').value = current.join(', ');
+  formState.touch('keywords');
+  renderKeywordPills();
+}
+
+// Optimistic local mirror of the server's keywords.json (updated on Apply,
+// see internal/server/session.go's Apply) -- keeps a keyword typed this
+// session showing up as a pill immediately, without a round trip. A
+// keyword merged in this way never carries a Location -- only an
+// already-known keyword can have one set, via the management UI below.
+function mergeKnownKeywords(kws) {
+  let changed = false;
+  kws.forEach((kw) => {
+    if (!findKnownKeyword(kw)) {
+      knownKeywords.push({ name: kw, location: null });
+      changed = true;
+    }
+  });
+  if (changed) { renderKeywordPills(); renderKeywordLocations(); }
+}
+
+// Deletes kw from the known-keywords list and strips it from every photo in
+// the source directory that currently has it (not just the one on screen),
+// via DELETE /api/keywords -- see internal/server/session.go's
+// DeleteKeyword. Confirmed first since, unlike the rest of this form, it
+// writes to disk immediately rather than waiting for Apply.
+async function deleteKeyword(kw) {
+  if (!confirm(`Delete "${kw}"?\n\nThis removes it from every photo in this folder that has it, not just this one, and can't be undone from here.`)) {
+    return;
+  }
+  const res = await fetch('/api/keywords', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword: kw }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(`Failed to delete "${kw}": ${body.error || res.statusText}`);
+    return;
+  }
+  // Filter locally rather than replacing knownKeywords with the server's
+  // response: the server's keywords.json only has what's been Applied, but
+  // knownKeywords also carries keywords merged in from an unApplied photo's
+  // existing EXIF (mergeKnownKeywords, above) -- replacing wholesale would
+  // drop those too, not just kw.
+  knownKeywords = knownKeywords.filter((k) => k.name !== kw);
+  // The file(s) on disk are already fixed by the server; mirror that in the
+  // current field without marking keywords touched -- this isn't the user
+  // editing this photo's keywords, just the display catching up.
+  formState.applyProgrammaticUpdate(() => {
+    const remaining = parseKeywords($('keywords-input').value).filter((k) => k !== kw);
+    $('keywords-input').value = remaining.join(', ');
+  });
+  renderKeywordPills();
+  renderKeywordLocations();
+}
+
+$('keyword-pills').addEventListener('click', formState.guardedField((e) => {
+  const delBtn = e.target.closest('.keyword-pill-delete');
+  if (delBtn) {
+    deleteKeyword(delBtn.dataset.keyword);
+    return;
+  }
+  const btn = e.target.closest('.keyword-pill');
+  if (!btn) return;
+  toggleKeyword(btn.dataset.keyword);
+}));
+
+// ---- Keyword location management ----
+
+// Renders a row per known keyword in the "Manage keyword locations"
+// disclosure: its saved Location if any, and two actions -- capture the
+// map's current pin as that keyword's Location, or clear it. Kept as its
+// own section below the quick-pick pills, rather than inline controls on
+// each pill, so the pill row itself stays visually simple.
+function renderKeywordLocations() {
+  $('keyword-locations-list').innerHTML = knownKeywords.map((kw) => {
+    const esc = escapeHtml(kw.name);
+    const status = kw.location
+      ? `${kw.location.lat.toFixed(4)}, ${kw.location.lon.toFixed(4)}`
+      : 'no location';
+    return `<li>` +
+      `<span class="kw-loc-name">${esc}</span>` +
+      `<span class="kw-loc-status">${status}</span>` +
+      `<button type="button" class="kw-loc-set" data-keyword="${esc}">Set to current pin</button>` +
+      `<button type="button" class="kw-loc-clear" data-keyword="${esc}"${kw.location ? '' : ' disabled'}>Clear</button>` +
+      `</li>`;
+  }).join('');
+}
+
+// Links kw to the map's current pin via POST /api/keywords/location (see
+// internal/server/session.go's SetKeywordLocation) -- writes immediately,
+// like deleteKeyword, rather than waiting for Apply.
+async function setKeywordLocationToCurrentPin(kw) {
+  if (!marker) {
+    alert('Drop a pin on the map first.');
+    return;
+  }
+  const altVal = $('altitude-input').value;
+  if (altVal === '') {
+    alert('Altitude is still loading — wait a moment, or enter it manually, then try again.');
+    return;
+  }
+  const ll = marker.getLatLng();
+  const res = await fetch('/api/keywords/location', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword: kw, lat: ll.lat, lon: ll.lng, alt: parseFloat(altVal) }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(`Failed to set location for "${kw}": ${body.error || res.statusText}`);
+    return;
+  }
+  knownKeywords = await res.json();
+  renderKeywordPills();
+  renderKeywordLocations();
+}
+
+async function clearKeywordLocation(kw) {
+  const res = await fetch('/api/keywords/location', {
+    method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword: kw }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(`Failed to clear location for "${kw}": ${body.error || res.statusText}`);
+    return;
+  }
+  knownKeywords = await res.json();
+  renderKeywordPills();
+  renderKeywordLocations();
+}
+
+$('keyword-locations-list').addEventListener('click', formState.guarded((e) => {
+  const setBtn = e.target.closest('.kw-loc-set');
+  if (setBtn) {
+    setKeywordLocationToCurrentPin(setBtn.dataset.keyword);
+    return;
+  }
+  const clearBtn = e.target.closest('.kw-loc-clear');
+  if (clearBtn) {
+    clearKeywordLocation(clearBtn.dataset.keyword);
+  }
+}));
+
 // ---- Field touch tracking ----
 
 $('datetime-input').addEventListener('input', formState.guardedField(() => {
@@ -231,6 +440,7 @@ $('altitude-input').addEventListener('input', formState.guardedField(() => {
 
 $('keywords-input').addEventListener('input', formState.guardedField(() => {
   formState.touch('keywords');
+  renderKeywordPills();
 }));
 
 $('caption-input').addEventListener('input', formState.guardedField(() => {
@@ -257,6 +467,7 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
         offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
       } else if (group === 'keywords') {
         $('keywords-input').value = (prev.keywords || []).join(', ');
+        renderKeywordPills();
       } else if (group === 'caption') {
         $('caption-input').value = prev.caption || '';
       }
@@ -291,8 +502,8 @@ function renderCurrent(data) {
   formState.invalidateElevation();
   $('additional-details').open = false;
 
+  const ex = data.existing || {};
   formState.applyProgrammaticUpdate(() => {
-    const ex = data.existing || {};
     $('datetime-input').value = ex.dateTime || '';
     $('offset-input').value = ex.offset || '';
     setOffsetRequired(false);
@@ -306,6 +517,8 @@ function renderCurrent(data) {
     $('keywords-input').value = (ex.keywords || []).join(', ');
     $('caption-input').value = ex.caption || '';
   });
+  mergeKnownKeywords(ex.keywords || []);
+  renderKeywordPills();
 
   document.querySelectorAll('.same-as-prev').forEach((btn) => {
     btn.disabled = !previousData[btn.dataset.group];
@@ -366,8 +579,10 @@ function doPrev() {
 }
 
 function doApply() {
+  const payload = buildApplyPayload();
+  if (payload.keywordsTouched) mergeKnownKeywords(payload.keywords);
   return runNavigation('apply', () => fetch('/api/photo/apply', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildApplyPayload()),
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
   }));
 }
 

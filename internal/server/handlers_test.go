@@ -9,6 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"phototagger/internal/keywords"
+	"phototagger/internal/locations"
+	"phototagger/internal/scan"
 )
 
 //go:embed testdata/web
@@ -55,10 +59,138 @@ func TestHandleState_ReportsModeCounts(t *testing.T) {
 	}
 }
 
+func TestHandleState_ReportsGeoCounts(t *testing.T) {
+	mux := newTestMux(t)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
+
+	var resp stateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	// The fixture from newTestSession has 2 photos, neither with GPS coordinates.
+	if resp.Geo.All != 2 || resp.Geo.MissingGPS != 2 {
+		t.Errorf("Geo = %+v, want {All:2 MissingGPS:2}", resp.Geo)
+	}
+}
+
+func TestHandleStart_BuildsQueueForRequestedGeo(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source")
+	backup := filepath.Join(root, "source-backup")
+	touch(t, filepath.Join(source, "a.jpg"))
+	touch(t, filepath.Join(source, "b.jpg"))
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs, err := locations.Load(filepath.Join(root, "locations.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exif := newFakeExif()
+	// a.jpg already has GPS coordinates, b.jpg doesn't -- only b.jpg should
+	// match the missing-gps Geo filter below.
+	exif.hasGPS[filepath.Join(source, "a.jpg")] = true
+
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	body, _ := json.Marshal(map[string]string{"mode": "all", "geo": "missing-gps"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/start", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	// Only b.jpg (no GPS) should be queued; a.jpg has GPS and is excluded.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/photo/current", nil))
+	var resp currentResponse
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp.Done || resp.Total != 1 {
+		t.Errorf("expected a single-photo queue (missing-gps only), got %+v", resp)
+	}
+}
+
+func TestHandleKeywordLocation_SetAndClear(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	applyBody, _ := json.Marshal(map[string]any{
+		"dateTime": "2024-01-01T08:00:00", "keywords": []string{"concert"}, "keywordsTouched": true,
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(applyBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	setBody, _ := json.Marshal(map[string]any{"keyword": "concert", "lat": 40.7128, "lon": -74.006, "alt": 10})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/location", bytes.NewReader(setBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var kws []keywords.Keyword
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 1 || kws[0].Location == nil || kws[0].Location.Lat != 40.7128 {
+		t.Fatalf("keywords after set = %+v", kws)
+	}
+
+	delBody, _ := json.Marshal(map[string]string{"keyword": "concert"})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/keywords/location", bytes.NewReader(delBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("clear status = %d, body = %s", rec.Code, rec.Body)
+	}
+	kws = nil
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 1 || kws[0].Location != nil {
+		t.Errorf("keywords after clear = %+v, want Location nil", kws)
+	}
+}
+
+func TestHandleKeywordLocation_RequiresKeyword(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]any{"keyword": "", "lat": 1, "lon": 2})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/location", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for empty keyword", rec.Code)
+	}
+}
+
+func TestHandleKeywordLocation_SetUnknownKeywordErrors(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]any{"keyword": "never-used", "lat": 1, "lon": 2})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/location", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an unknown keyword", rec.Code)
+	}
+}
+
 func TestHandleStart_BuildsQueueForRequestedMode(t *testing.T) {
 	mux := newTestMux(t)
 
-	body, _ := json.Marshal(map[string]string{"mode": "tagged"})
+	body, _ := json.Marshal(map[string]string{"mode": "tagged", "geo": "all"})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/start", bytes.NewReader(body)))
 	if rec.Code != http.StatusOK {
@@ -78,7 +210,18 @@ func TestHandleStart_BuildsQueueForRequestedMode(t *testing.T) {
 func TestHandleStart_RejectsInvalidMode(t *testing.T) {
 	mux := newTestMux(t)
 
-	body, _ := json.Marshal(map[string]string{"mode": "bogus"})
+	body, _ := json.Marshal(map[string]string{"mode": "bogus", "geo": "all"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/start", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleStart_RejectsInvalidGeo(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]string{"mode": "all", "geo": "bogus"})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/start", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
@@ -167,6 +310,87 @@ func TestHandleFavourites_GetAndPost(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &favs)
 	if len(favs) != 1 || favs[0]["name"] != "Home" {
 		t.Errorf("favourites = %v", favs)
+	}
+}
+
+func TestHandleKeywords_ReflectsAppliedKeywords(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/keywords", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET status = %d", rec.Code)
+	}
+	var kws []keywords.Keyword
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 0 {
+		t.Fatalf("keywords = %v, want none before any Apply", kws)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"dateTime": "2024-01-01T08:00:00", "keywords": []string{"beach", "family"}, "keywordsTouched": true,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/keywords", nil))
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 2 || kws[0].Name != "beach" || kws[1].Name != "family" {
+		t.Errorf("keywords = %+v, want [beach family]", kws)
+	}
+}
+
+func TestHandleKeywords_DeleteRemovesFromKnownList(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	applyBody, _ := json.Marshal(map[string]any{
+		"dateTime": "2024-01-01T08:00:00", "keywords": []string{"beach", "family"}, "keywordsTouched": true,
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(applyBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	delBody, _ := json.Marshal(map[string]string{"keyword": "beach"})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/keywords", bytes.NewReader(delBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	var kws []keywords.Keyword
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 1 || kws[0].Name != "family" {
+		t.Errorf("keywords after delete = %+v, want [family]", kws)
+	}
+}
+
+func TestHandleKeywords_DeleteRequiresKeyword(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	body, _ := json.Marshal(map[string]string{"keyword": ""})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/keywords", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for empty keyword", rec.Code)
 	}
 }
 

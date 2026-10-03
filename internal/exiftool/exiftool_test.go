@@ -89,6 +89,118 @@ func TestReadDateTimeOriginalBatch_Empty(t *testing.T) {
 	}
 }
 
+func TestReadKeywordsBatch(t *testing.T) {
+	json := `[
+		{"SourceFile":"a.jpg","Keywords":["beach","family"]},
+		{"SourceFile":"b.jpg"},
+		{"SourceFile":"c.jpg","Keywords":"solo"}
+	]`
+	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
+	c := NewWithRunner(r)
+
+	kws, err := c.ReadKeywordsBatch([]string{"a.jpg", "b.jpg", "c.jpg"})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !reflect.DeepEqual(kws["a.jpg"], []string{"beach", "family"}) {
+		t.Errorf("a.jpg = %v", kws["a.jpg"])
+	}
+	if !reflect.DeepEqual(kws["c.jpg"], []string{"solo"}) {
+		t.Errorf("c.jpg = %v", kws["c.jpg"])
+	}
+	if _, ok := kws["b.jpg"]; ok {
+		t.Errorf("b.jpg should be absent from the map, got %v", kws["b.jpg"])
+	}
+
+	if len(r.calls) != 1 {
+		t.Fatalf("expected 1 exiftool invocation, got %d: %v", len(r.calls), r.calls)
+	}
+	args := r.calls[0]
+	for _, want := range []string{"-j", "-Keywords", "a.jpg", "b.jpg", "c.jpg"} {
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("args %v missing %q", args, want)
+		}
+	}
+}
+
+func TestReadKeywordsBatch_Empty(t *testing.T) {
+	r := &fakeRunner{}
+	c := NewWithRunner(r)
+
+	kws, err := c.ReadKeywordsBatch(nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(kws) != 0 {
+		t.Errorf("got %v, want empty", kws)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected no exiftool invocation for an empty batch, got %v", r.calls)
+	}
+}
+
+func TestReadGPSPresenceBatch(t *testing.T) {
+	json := `[
+		{"SourceFile":"a.jpg","GPSLatitude":53.3498,"GPSLongitude":-6.2603},
+		{"SourceFile":"b.jpg"},
+		{"SourceFile":"c.jpg","GPSLatitude":40.7128}
+	]`
+	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
+	c := NewWithRunner(r)
+
+	has, err := c.ReadGPSPresenceBatch([]string{"a.jpg", "b.jpg", "c.jpg"})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !has["a.jpg"] {
+		t.Error("a.jpg has both lat and lon, want has[a.jpg] = true")
+	}
+	if has["b.jpg"] {
+		t.Error("b.jpg has neither, want has[b.jpg] = false")
+	}
+	if has["c.jpg"] {
+		t.Error("c.jpg has only latitude, want has[c.jpg] = false")
+	}
+
+	if len(r.calls) != 1 {
+		t.Fatalf("expected 1 exiftool invocation, got %d: %v", len(r.calls), r.calls)
+	}
+	args := r.calls[0]
+	for _, want := range []string{"-n", "-j", "-GPSLatitude", "-GPSLongitude", "a.jpg", "b.jpg", "c.jpg"} {
+		found := false
+		for _, a := range args {
+			if a == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("args %v missing %q", args, want)
+		}
+	}
+}
+
+func TestReadGPSPresenceBatch_Empty(t *testing.T) {
+	r := &fakeRunner{}
+	c := NewWithRunner(r)
+
+	has, err := c.ReadGPSPresenceBatch(nil)
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(has) != 0 {
+		t.Errorf("got %v, want empty", has)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected no exiftool invocation for an empty batch, got %v", r.calls)
+	}
+}
+
 func TestExtractPreview_PrefersPreviewImage(t *testing.T) {
 	r := &fakeRunner{outputs: [][]byte{[]byte("preview-bytes")}}
 	c := NewWithRunner(r)
@@ -354,5 +466,57 @@ func TestWriteFields_KeywordsClearedWhenEmptySlice(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected -Keywords= to clear, got %v", args)
+	}
+}
+
+func TestRemoveKeywordBatch_BuildsExpectedArgs(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{[]byte("1 image files updated")}}
+	c := NewWithRunner(r)
+
+	if err := c.RemoveKeywordBatch([]string{"a.jpg", "b.jpg"}, "beach"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("expected 1 invocation, got %d", len(r.calls))
+	}
+	want := []string{"-overwrite_original", "-Keywords-=beach", "a.jpg", "b.jpg"}
+	if !reflect.DeepEqual(r.calls[0], want) {
+		t.Errorf("args = %v, want %v", r.calls[0], want)
+	}
+}
+
+func TestRemoveKeywordBatch_ChunksLargePathLists(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{[]byte("ok"), []byte("ok"), []byte("ok")}}
+	c := NewWithRunner(r)
+
+	paths := make([]string, removeKeywordBatchSize*2+5)
+	for i := range paths {
+		paths[i] = "p.jpg"
+	}
+
+	if err := c.RemoveKeywordBatch(paths, "beach"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(r.calls) != 3 {
+		t.Fatalf("expected 3 batched invocations, got %d", len(r.calls))
+	}
+	// Each call's path count is its args minus the two flags.
+	if got := len(r.calls[0]) - 2; got != removeKeywordBatchSize {
+		t.Errorf("first batch had %d paths, want %d", got, removeKeywordBatchSize)
+	}
+	if got := len(r.calls[2]) - 2; got != 5 {
+		t.Errorf("last batch had %d paths, want 5", got)
+	}
+}
+
+func TestRemoveKeywordBatch_EmptyPathsIsNoop(t *testing.T) {
+	r := &fakeRunner{}
+	c := NewWithRunner(r)
+
+	if err := c.RemoveKeywordBatch(nil, "beach"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(r.calls) != 0 {
+		t.Errorf("expected no exiftool invocation for an empty path list, got %d", len(r.calls))
 	}
 }

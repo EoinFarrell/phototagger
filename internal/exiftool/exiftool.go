@@ -91,6 +91,77 @@ func (c *Client) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time
 	return dates, nil
 }
 
+// ReadKeywordsBatch reads the existing Keywords tag for many photos in a
+// single exiftool invocation, used at startup to seed the known-keywords
+// store with whatever's already embedded in the source directory's photos
+// (see internal/keywords). The returned map contains an entry only for
+// paths that have the tag; a missing entry means it wasn't present.
+func (c *Client) ReadKeywordsBatch(paths []string) (map[string][]string, error) {
+	keywords := make(map[string][]string, len(paths))
+	if len(paths) == 0 {
+		return keywords, nil
+	}
+
+	args := append([]string{"-j", "-Keywords"}, paths...)
+	out, err := c.runner.Output(args...)
+	if err != nil {
+		return nil, fmt.Errorf("reading Keywords for %d photo(s): %w", len(paths), err)
+	}
+
+	var records []struct {
+		SourceFile string          `json:"SourceFile"`
+		Keywords   json.RawMessage `json:"Keywords"`
+	}
+	if err := json.Unmarshal(out, &records); err != nil {
+		return nil, fmt.Errorf("parsing Keywords batch response: %w", err)
+	}
+
+	for _, r := range records {
+		if len(r.Keywords) == 0 {
+			continue
+		}
+		kws, err := parseKeywords(r.Keywords)
+		if err != nil {
+			return nil, fmt.Errorf("parsing Keywords %q from %s: %w", r.Keywords, r.SourceFile, err)
+		}
+		keywords[r.SourceFile] = kws
+	}
+	return keywords, nil
+}
+
+// ReadGPSPresenceBatch reads whether each photo has both GPSLatitude and
+// GPSLongitude set, in a single exiftool invocation, used at startup to
+// classify entries for the "missing GPS" Geo filter (see internal/queue).
+// A path absent from the returned map is treated the same as false by
+// callers -- exiftool's -j omits a tag entirely rather than emitting null
+// for a file with no EXIF data at all.
+func (c *Client) ReadGPSPresenceBatch(paths []string) (map[string]bool, error) {
+	has := make(map[string]bool, len(paths))
+	if len(paths) == 0 {
+		return has, nil
+	}
+
+	args := append([]string{"-n", "-j", "-GPSLatitude", "-GPSLongitude"}, paths...)
+	out, err := c.runner.Output(args...)
+	if err != nil {
+		return nil, fmt.Errorf("reading GPS presence for %d photo(s): %w", len(paths), err)
+	}
+
+	var records []struct {
+		SourceFile   string   `json:"SourceFile"`
+		GPSLatitude  *float64 `json:"GPSLatitude"`
+		GPSLongitude *float64 `json:"GPSLongitude"`
+	}
+	if err := json.Unmarshal(out, &records); err != nil {
+		return nil, fmt.Errorf("parsing GPS presence batch response: %w", err)
+	}
+
+	for _, r := range records {
+		has[r.SourceFile] = r.GPSLatitude != nil && r.GPSLongitude != nil
+	}
+	return has, nil
+}
+
 // ExtractPreview returns image bytes suitable for browser display, for
 // formats (HEIC/HEIF) browsers can't reliably render natively. It tries the
 // embedded PreviewImage first, falling back to ThumbnailImage.
@@ -268,6 +339,29 @@ func (f Fields) args() []string {
 	}
 
 	return args
+}
+
+// removeKeywordBatchSize caps how many paths go into a single exiftool
+// invocation when bulk-removing a keyword, for the same command-line-length
+// reason as ReadDateTimeOriginalBatch's chunking in session.go.
+const removeKeywordBatchSize = 200
+
+// RemoveKeywordBatch strips kw from every photo in paths that currently has
+// it. exiftool's -Keywords-=VALUE leaves a photo without that value
+// untouched and doesn't error, so paths can safely be every photo in a
+// directory rather than just the ones known to carry kw.
+func (c *Client) RemoveKeywordBatch(paths []string, kw string) error {
+	for start := 0; start < len(paths); start += removeKeywordBatchSize {
+		end := start + removeKeywordBatchSize
+		if end > len(paths) {
+			end = len(paths)
+		}
+		args := append([]string{"-overwrite_original", "-Keywords-=" + kw}, paths[start:end]...)
+		if _, err := c.runner.Output(args...); err != nil {
+			return fmt.Errorf("removing keyword %q from photos %d-%d: %w", kw, start, end, err)
+		}
+	}
+	return nil
 }
 
 func gpsArgs(lat, lon float64) []string {

@@ -12,12 +12,13 @@ import (
 )
 
 // Entry pairs a scanned photo with its existing DateTimeOriginal, if any,
-// and whether its filename already matches the Tagged pattern (see
-// CONTEXT.md).
+// whether its filename already matches the Tagged pattern (see
+// CONTEXT.md), and whether it already carries GPS coordinates.
 type Entry struct {
 	Photo            scan.Photo
 	DateTimeOriginal *time.Time
 	Tagged           bool
+	HasGPS           bool
 }
 
 // Mode selects which subset of a chronologically Ordered set of entries a
@@ -51,6 +52,43 @@ func Filter(entries []Entry, mode Mode) []Entry {
 	out := make([]Entry, 0, len(entries))
 	for _, e := range entries {
 		if e.Tagged == want {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// GeoFilter selects which subset of entries, independent of Mode, a run's
+// queue includes based on whether GPS coordinates are already present. It's
+// a second, orthogonal axis to Mode -- a photo may be Tagged or Non-Tagged
+// and still be missing GPS data, since the two are set independently (a
+// rename vs. a GPS write).
+type GeoFilter string
+
+const (
+	GeoAll        GeoFilter = "all"
+	GeoMissingGPS GeoFilter = "missing-gps"
+)
+
+// ParseGeoFilter validates a wire-format geo filter string.
+func ParseGeoFilter(s string) (GeoFilter, bool) {
+	switch GeoFilter(s) {
+	case GeoAll, GeoMissingGPS:
+		return GeoFilter(s), true
+	default:
+		return "", false
+	}
+}
+
+// FilterGeo returns the subset of entries matching geo, preserving relative
+// order. GeoAll returns every entry unfiltered.
+func FilterGeo(entries []Entry, geo GeoFilter) []Entry {
+	if geo == GeoAll {
+		return entries
+	}
+	out := make([]Entry, 0, len(entries))
+	for _, e := range entries {
+		if !e.HasGPS {
 			out = append(out, e)
 		}
 	}

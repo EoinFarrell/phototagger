@@ -18,6 +18,11 @@
     <label><input type="radio" name="mode" value="tagged"> Tagged (<span id="mode-count-tagged">0</span>)</label>
     <label><input type="radio" name="mode" value="all"> All (<span id="mode-count-all">0</span>)</label>
   </fieldset>
+  <fieldset id="geo-select">
+    <legend>Geo</legend>
+    <label><input type="radio" name="geo" value="all" checked> All (<span id="geo-count-all">0</span>)</label>
+    <label><input type="radio" name="geo" value="missing-gps"> Missing GPS (<span id="geo-count-missing-gps">0</span>)</label>
+  </fieldset>
   <button id="start-button" disabled>Start tagging</button>
 </section>
 
@@ -61,6 +66,11 @@
           <button type="button" class="same-as-prev" data-group="keywords">↩ same as previous</button>
         </legend>
         <label>Comma-separated <input type="text" id="keywords-input"></label>
+        <div id="keyword-pills"></div>
+        <details id="keyword-locations-manage">
+          <summary>Manage keyword locations</summary>
+          <ul id="keyword-locations-list"></ul>
+        </details>
       </fieldset>
 
       <fieldset data-group="caption">

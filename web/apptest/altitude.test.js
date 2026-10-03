@@ -146,6 +146,8 @@ test('selecting a favourite is not clobbered by a still-pending elevation lookup
   // A favourite already exists with a real, non-zero stored altitude.
   fetchMock.resolveMatching('/api/favourites', [{ name: 'Home', lat: 50, lon: 60, alt: 150 }]);
   await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', []);
+  await flushMicrotasks();
   fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
   await flushMicrotasks();
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"phototagger/internal/exiftool"
+	"phototagger/internal/keywords"
 	"phototagger/internal/locations"
 	"phototagger/internal/queue"
 	"phototagger/internal/rename"
@@ -45,6 +46,9 @@ type ExifClient interface {
 	ReadExisting(path string) (exiftool.Existing, error)
 	WriteFields(path string, f exiftool.Fields) error
 	ExtractPreview(path string) ([]byte, error)
+	RemoveKeywordBatch(paths []string, kw string) error
+	ReadKeywordsBatch(paths []string) (map[string][]string, error)
+	ReadGPSPresenceBatch(paths []string) (map[string]bool, error)
 }
 
 // TZResolver is the subset of *tzoffset.Resolver the session needs.
@@ -112,13 +116,16 @@ type Session struct {
 	geocoder  Geocoder
 	elevation Elevation
 	locations *locations.Store
+	keywords  *keywords.Store
 
 	last lastValues
 }
 
 // NewSession builds a Session from an already-completed scan, reading each
 // photo's existing DateTimeOriginal to establish queue order (see
-// internal/queue) and classifying each as Tagged/Non-Tagged by filename.
+// internal/queue), classifying each as Tagged/Non-Tagged by filename, and
+// seeding kws with every keyword already embedded in the directory's photos
+// so the quick-pick pills aren't limited to keywords Applied via this tool.
 // The run's actual queue isn't built yet -- that happens once the start
 // screen's Mode choice reaches Start().
 func NewSession(
@@ -129,15 +136,29 @@ func NewSession(
 	geocoder Geocoder,
 	elevation Elevation,
 	locs *locations.Store,
+	kws *keywords.Store,
 ) (*Session, error) {
 	dates, err := readDatesInBatches(exif, scanResult.Photos)
 	if err != nil {
 		return nil, err
 	}
 
+	existingKeywords, err := readKeywordsInBatches(exif, scanResult.Photos)
+	if err != nil {
+		return nil, err
+	}
+	if err := kws.Add(existingKeywords); err != nil {
+		return nil, fmt.Errorf("seeding known keywords: %w", err)
+	}
+
+	hasGPS, err := readGPSPresenceInBatches(exif, scanResult.Photos)
+	if err != nil {
+		return nil, err
+	}
+
 	entries := make([]queue.Entry, 0, len(scanResult.Photos))
 	for _, p := range scanResult.Photos {
-		entry := queue.Entry{Photo: p, Tagged: rename.IsTagged(filepath.Base(p.RelPath))}
+		entry := queue.Entry{Photo: p, Tagged: rename.IsTagged(filepath.Base(p.RelPath)), HasGPS: hasGPS[p.Path]}
 		if dt, ok := dates[p.Path]; ok {
 			entry.DateTimeOriginal = &dt
 		}
@@ -154,6 +175,7 @@ func NewSession(
 		geocoder:   geocoder,
 		elevation:  elevation,
 		locations:  locs,
+		keywords:   kws,
 	}, nil
 }
 
@@ -172,23 +194,39 @@ func (s *Session) Counts() modeCounts {
 	return counts
 }
 
-// Start builds this run's fixed queue: the subset of allEntries matching
-// mode, in the same chronological order (see CONTEXT.md's Queue
-// definition). Resets the current pointer and Applied tracking, so calling
-// it again (e.g. before any Apply) rebuilds the queue from scratch.
-func (s *Session) Start(mode queue.Mode) {
+// GeoCounts reports how many scanned photos match each Geo filter, for the
+// start screen. Independent of Mode -- counted over every scanned photo
+// regardless of which Mode is currently selected, mirroring how Mode and
+// Geo are chosen independently and ANDed together by Start.
+func (s *Session) GeoCounts() geoCounts {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = queue.Filter(s.allEntries, mode)
+	counts := geoCounts{All: len(s.allEntries)}
+	for _, e := range s.allEntries {
+		if !e.HasGPS {
+			counts.MissingGPS++
+		}
+	}
+	return counts
+}
+
+// Start builds this run's fixed queue: the subset of allEntries matching
+// both mode and geo, in the same chronological order (see CONTEXT.md's
+// Queue definition). Resets the current pointer and Applied tracking, so
+// calling it again (e.g. before any Apply) rebuilds the queue from scratch.
+func (s *Session) Start(mode queue.Mode, geo queue.GeoFilter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.entries = queue.FilterGeo(queue.Filter(s.allEntries, mode), geo)
 	s.applied = make([]bool, len(s.entries))
 	s.current = 0
 }
 
-// dateReadBatchSize caps how many paths go into a single exiftool
-// invocation when establishing queue order. exiftool's command line can
-// handle far more than this, but chunking keeps any one invocation's JSON
-// response a reasonable size.
-const dateReadBatchSize = 200
+// metadataReadBatchSize caps how many paths go into a single exiftool
+// invocation when bulk-reading metadata at startup. exiftool's command line
+// can handle far more than this, but chunking keeps any one invocation's
+// JSON response a reasonable size.
+const metadataReadBatchSize = 200
 
 // readDatesInBatches reads every photo's existing DateTimeOriginal via a
 // small number of batched exiftool invocations rather than one per photo --
@@ -196,8 +234,8 @@ const dateReadBatchSize = 200
 // for hundreds of small reads.
 func readDatesInBatches(exif ExifClient, photos []scan.Photo) (map[string]time.Time, error) {
 	dates := make(map[string]time.Time, len(photos))
-	for start := 0; start < len(photos); start += dateReadBatchSize {
-		end := start + dateReadBatchSize
+	for start := 0; start < len(photos); start += metadataReadBatchSize {
+		end := start + metadataReadBatchSize
 		if end > len(photos) {
 			end = len(photos)
 		}
@@ -214,6 +252,64 @@ func readDatesInBatches(exif ExifClient, photos []scan.Photo) (map[string]time.T
 		}
 	}
 	return dates, nil
+}
+
+// readKeywordsInBatches reads every photo's existing Keywords via a small
+// number of batched exiftool invocations, returning the deduplicated union
+// in first-seen order for seeding the known-keywords store at startup.
+func readKeywordsInBatches(exif ExifClient, photos []scan.Photo) ([]string, error) {
+	seen := map[string]bool{}
+	var all []string
+	for start := 0; start < len(photos); start += metadataReadBatchSize {
+		end := start + metadataReadBatchSize
+		if end > len(photos) {
+			end = len(photos)
+		}
+		paths := make([]string, end-start)
+		for i, p := range photos[start:end] {
+			paths[i] = p.Path
+		}
+		batch, err := exif.ReadKeywordsBatch(paths)
+		if err != nil {
+			return nil, fmt.Errorf("reading keywords for photos %d-%d: %w", start, end, err)
+		}
+		for _, kws := range batch {
+			for _, k := range kws {
+				if seen[k] {
+					continue
+				}
+				seen[k] = true
+				all = append(all, k)
+			}
+		}
+	}
+	return all, nil
+}
+
+// readGPSPresenceInBatches reads whether each photo already has GPS
+// coordinates via a small number of batched exiftool invocations, for the
+// Geo filter's "missing GPS" classification -- same batching rationale as
+// readDatesInBatches.
+func readGPSPresenceInBatches(exif ExifClient, photos []scan.Photo) (map[string]bool, error) {
+	hasGPS := make(map[string]bool, len(photos))
+	for start := 0; start < len(photos); start += metadataReadBatchSize {
+		end := start + metadataReadBatchSize
+		if end > len(photos) {
+			end = len(photos)
+		}
+		paths := make([]string, end-start)
+		for i, p := range photos[start:end] {
+			paths[i] = p.Path
+		}
+		batch, err := exif.ReadGPSPresenceBatch(paths)
+		if err != nil {
+			return nil, fmt.Errorf("reading GPS presence for photos %d-%d: %w", start, end, err)
+		}
+		for path, has := range batch {
+			hasGPS[path] = has
+		}
+	}
+	return hasGPS, nil
 }
 
 // Total returns the number of photos in the current run's queue -- zero
@@ -433,6 +529,12 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 		return ApplyResult{}, err
 	}
 
+	if req.KeywordsTouched {
+		if err := s.keywords.Add(req.Keywords); err != nil {
+			return ApplyResult{}, fmt.Errorf("saving known keywords: %w", err)
+		}
+	}
+
 	slug := s.resolveSlug(req)
 	destDir := filepath.Dir(photo.Path)
 	currentName := filepath.Base(photo.Path)
@@ -526,4 +628,46 @@ func (s *Session) Favourites() []locations.Favourite {
 // AddFavourite saves a new favourite (or updates one with the same name).
 func (s *Session) AddFavourite(fav locations.Favourite) error {
 	return s.locations.Add(fav)
+}
+
+// Keywords returns every previously-Applied keyword and its optional saved
+// Location, for the tagging UI's quick-pick pills and keyword-location
+// management section (see web/static/app.js).
+func (s *Session) Keywords() []keywords.Keyword {
+	return s.keywords.All()
+}
+
+// SetKeywordLocation sets kw's saved Location, for the tagging UI's
+// keyword-location management section -- picking that keyword later snaps
+// the map to it (see web/static/app.js).
+func (s *Session) SetKeywordLocation(kw string, loc keywords.Location) error {
+	return s.keywords.SetLocation(kw, &loc)
+}
+
+// ClearKeywordLocation removes kw's saved Location, if any.
+func (s *Session) ClearKeywordLocation(kw string) error {
+	return s.keywords.SetLocation(kw, nil)
+}
+
+// DeleteKeyword removes kw from the known-keywords pill list and strips it
+// from every photo currently in the source directory that carries it. It
+// re-scans the directory rather than walking allEntries/entries: a photo
+// Applied earlier this run has already been renamed on disk, so allEntries'
+// copy of it holds a stale pre-rename path (Apply updates only entries,
+// see its doc comment), and entries itself may exclude photos outside this
+// run's Mode that could still carry kw.
+func (s *Session) DeleteKeyword(kw string) error {
+	result, err := scan.Scan(s.SourceDir)
+	if err != nil {
+		return fmt.Errorf("rescanning %s: %w", s.SourceDir, err)
+	}
+	paths := make([]string, len(result.Photos))
+	for i, p := range result.Photos {
+		paths[i] = p.Path
+	}
+
+	if err := s.exif.RemoveKeywordBatch(paths, kw); err != nil {
+		return err
+	}
+	return s.keywords.Remove(kw)
 }
