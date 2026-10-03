@@ -185,6 +185,32 @@ func TestReadGPSPresenceBatch(t *testing.T) {
 	}
 }
 
+// TestReadGPSPresenceBatch_ToleratesNonNumericValue guards against a crash
+// seen against a real photo library: despite -n, exiftool can still emit a
+// GPS tag as a non-numeric JSON value (e.g. a string) for a photo with
+// malformed GPS EXIF data. Presence detection only needs to know the tag
+// was there, not parse it, so this must still report it as present instead
+// of erroring out the whole batch.
+func TestReadGPSPresenceBatch_ToleratesNonNumericValue(t *testing.T) {
+	json := `[
+		{"SourceFile":"a.jpg","GPSLatitude":"malformed","GPSLongitude":"malformed"},
+		{"SourceFile":"b.jpg"}
+	]`
+	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
+	c := NewWithRunner(r)
+
+	has, err := c.ReadGPSPresenceBatch([]string{"a.jpg", "b.jpg"})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !has["a.jpg"] {
+		t.Error("a.jpg has a (malformed but present) GPS tag, want has[a.jpg] = true")
+	}
+	if has["b.jpg"] {
+		t.Error("b.jpg has no GPS tag at all, want has[b.jpg] = false")
+	}
+}
+
 func TestReadGPSPresenceBatch_Empty(t *testing.T) {
 	r := &fakeRunner{}
 	c := NewWithRunner(r)

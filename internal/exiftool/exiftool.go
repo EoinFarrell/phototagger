@@ -147,19 +147,32 @@ func (c *Client) ReadGPSPresenceBatch(paths []string) (map[string]bool, error) {
 		return nil, fmt.Errorf("reading GPS presence for %d photo(s): %w", len(paths), err)
 	}
 
+	// GPSLatitude/GPSLongitude are read as raw JSON rather than *float64:
+	// -n normally forces decimal output, but some real-world photos carry
+	// GPS tags in a form exiftool can't convert cleanly (seen in practice
+	// as a string value even with -n), which would otherwise abort the
+	// whole batch over a single photo. Presence-detection only needs to
+	// know the tag was there, not parse its value, so any non-null JSON
+	// value -- numeric or not -- counts as present.
 	var records []struct {
-		SourceFile   string   `json:"SourceFile"`
-		GPSLatitude  *float64 `json:"GPSLatitude"`
-		GPSLongitude *float64 `json:"GPSLongitude"`
+		SourceFile   string          `json:"SourceFile"`
+		GPSLatitude  json.RawMessage `json:"GPSLatitude"`
+		GPSLongitude json.RawMessage `json:"GPSLongitude"`
 	}
 	if err := json.Unmarshal(out, &records); err != nil {
 		return nil, fmt.Errorf("parsing GPS presence batch response: %w", err)
 	}
 
 	for _, r := range records {
-		has[r.SourceFile] = r.GPSLatitude != nil && r.GPSLongitude != nil
+		has[r.SourceFile] = jsonPresent(r.GPSLatitude) && jsonPresent(r.GPSLongitude)
 	}
 	return has, nil
+}
+
+// jsonPresent reports whether raw holds an actual JSON value rather than
+// being absent (empty) or explicitly null.
+func jsonPresent(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
 }
 
 // ExtractPreview returns image bytes suitable for browser display, for
