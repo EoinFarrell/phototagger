@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -271,9 +272,32 @@ func parseKeywords(raw json.RawMessage) ([]string, error) {
 	}
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil {
-		return []string{asString}, nil
+		return splitKeywordString(asString), nil
 	}
 	return nil, fmt.Errorf("unexpected Keywords shape: %s", raw)
+}
+
+// splitKeywordString splits a single Keywords value on commas, trimming
+// whitespace and dropping empties. Seen in practice: a third-party tool
+// (a race-photography vendor's watermarking software) wrote an entire
+// keyword list as one comma-joined string into what's normally a
+// multi-value tag, so exiftool reads it back as a single JSON string
+// rather than an array -- "2019, Sussex Sport Photography, revolve24,
+// brands hatch, bike, ..." as one literal keyword, instead of eleven.
+// Splitting it here matches the comma-separated convention this app's own
+// keywords field already uses everywhere else (see web/static/app.js's
+// own parseKeywords), rather than surfacing the whole blob as one tag. A
+// single-word value with no comma splits into itself unchanged.
+func splitKeywordString(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Fields holds the metadata to write for a single photo's Apply step. Every
