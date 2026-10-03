@@ -23,6 +23,22 @@ import (
 // OffsetTimeOriginal, exactly like the underlying EXIF tags.
 const dateTimeLayout = "2006-01-02T15:04:05"
 
+// dateTimeLayoutNoSeconds matches dateTimeLayout, except for the seconds
+// component. Per the HTML spec, <input type="datetime-local">.value omits
+// seconds when they're zero, so a photo timestamped on an exact minute
+// round-trips through the browser without them.
+const dateTimeLayoutNoSeconds = "2006-01-02T15:04"
+
+// parseDateTimeLocal parses a datetime-local value from the browser,
+// accepting either dateTimeLayout or, when seconds are zero, the
+// seconds-omitted form the browser actually sends in that case.
+func parseDateTimeLocal(s string) (time.Time, error) {
+	if dt, err := time.Parse(dateTimeLayout, s); err == nil {
+		return dt, nil
+	}
+	return time.Parse(dateTimeLayoutNoSeconds, s)
+}
+
 // ExifClient is the subset of *exiftool.Client the session needs.
 type ExifClient interface {
 	ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time, error)
@@ -387,7 +403,7 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	if req.DateTime == "" {
 		return ApplyResult{}, fmt.Errorf("dateTime is required")
 	}
-	dt, err := time.Parse(dateTimeLayout, req.DateTime)
+	dt, err := parseDateTimeLocal(req.DateTime)
 	if err != nil {
 		return ApplyResult{}, fmt.Errorf("invalid dateTime %q: %w", req.DateTime, err)
 	}
@@ -477,7 +493,7 @@ func (s *Session) updateLastValues(req ApplyRequest) {
 		s.last.location = &LocationFields{Lat: *req.Lat, Lon: *req.Lon, Alt: req.Alt, FavouriteName: req.FavouriteName}
 	}
 	if req.DateTimeTouched {
-		dt, err := time.Parse(dateTimeLayout, req.DateTime)
+		dt, err := parseDateTimeLocal(req.DateTime)
 		if err == nil {
 			s.last.dateTime = &DateTimeFields{DateTime: dt, Offset: req.Offset}
 		}

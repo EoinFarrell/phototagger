@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"time"
 
 	"phototagger/internal/locations"
 	"phototagger/internal/queue"
@@ -331,7 +330,7 @@ func handleTimezone(sess *Session) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
-		dt, err := time.Parse(dateTimeLayout, req.DateTime)
+		dt, err := parseDateTimeLocal(req.DateTime)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
