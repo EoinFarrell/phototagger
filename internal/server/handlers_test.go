@@ -187,6 +187,70 @@ func TestHandleKeywordLocation_SetUnknownKeywordErrors(t *testing.T) {
 	}
 }
 
+func TestHandleKeywordRename_ChangesText(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	applyBody, _ := json.Marshal(map[string]any{
+		"dateTime": "2024-01-01T08:00:00", "keywords": []string{"beach"}, "keywordsTouched": true,
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(applyBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	renameBody, _ := json.Marshal(map[string]string{"oldKeyword": "beach", "newKeyword": "seaside"})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/rename", bytes.NewReader(renameBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var kws []keywords.Keyword
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 1 || kws[0].Name != "seaside" {
+		t.Errorf("keywords after rename = %+v, want [seaside]", kws)
+	}
+}
+
+func TestHandleKeywordRename_RequiresOldKeyword(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]string{"oldKeyword": "", "newKeyword": "seaside"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/rename", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for an empty oldKeyword", rec.Code)
+	}
+}
+
+func TestHandleKeywordRename_RejectsCollision(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	applyBody, _ := json.Marshal(map[string]any{
+		"dateTime": "2024-01-01T08:00:00", "keywords": []string{"beach", "family"}, "keywordsTouched": true,
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(applyBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	renameBody, _ := json.Marshal(map[string]string{"oldKeyword": "beach", "newKeyword": "family"})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/rename", bytes.NewReader(renameBody)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for a destination-name collision", rec.Code)
+	}
+}
+
 func TestHandleStart_BuildsQueueForRequestedMode(t *testing.T) {
 	mux := newTestMux(t)
 

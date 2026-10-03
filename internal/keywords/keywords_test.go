@@ -122,6 +122,92 @@ func TestRemove_ReindexesSurvivingKeywords(t *testing.T) {
 	}
 }
 
+func TestRename_ChangesTextPreservingPositionAndLocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"beach", "family", "sunset"})
+	loc := &Location{Lat: 1, Lon: 2, Alt: 3}
+	store.SetLocation("family", loc)
+
+	if err := store.Rename("family", "relatives"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	all := store.All()
+	if len(all) != 3 || all[1].Name != "relatives" || all[1].Location == nil || *all[1].Location != *loc {
+		t.Errorf("got %+v, want \"relatives\" at index 1 carrying %+v", all, loc)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := names(reloaded.All()); len(got) != 3 || got[1] != "relatives" {
+		t.Errorf("rename did not persist, got %+v", got)
+	}
+}
+
+func TestRename_NoopWhenNamesEqual(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"beach"})
+
+	if err := store.Rename("beach", "beach"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if all := names(store.All()); len(all) != 1 || all[0] != "beach" {
+		t.Errorf("got %+v, want [beach] unchanged", all)
+	}
+}
+
+func TestRename_UnknownOldNameErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+
+	if err := store.Rename("never-added", "anything"); err == nil {
+		t.Fatal("expected error renaming an unknown keyword")
+	}
+}
+
+func TestRename_BlankNewNameErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"beach"})
+
+	if err := store.Rename("beach", "   "); err == nil {
+		t.Fatal("expected error renaming to a blank name")
+	}
+	if all := names(store.All()); len(all) != 1 || all[0] != "beach" {
+		t.Errorf("a rejected rename must not change the keyword, got %+v", all)
+	}
+}
+
+func TestRename_CollisionWithAnotherKeywordErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"beach", "family"})
+
+	if err := store.Rename("beach", "family"); err == nil {
+		t.Fatal("expected error renaming onto an existing different keyword")
+	}
+	if all := names(store.All()); len(all) != 2 || all[0] != "beach" || all[1] != "family" {
+		t.Errorf("a rejected rename must not change either keyword, got %+v", all)
+	}
+}
+
+func TestExists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"beach"})
+
+	if !store.Exists("beach") {
+		t.Error("Exists(\"beach\") = false, want true")
+	}
+	if store.Exists("never-added") {
+		t.Error("Exists(\"never-added\") = true, want false")
+	}
+}
+
 func TestSetLocation_SetsAndClears(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keywords.json")
 	store, _ := Load(path)

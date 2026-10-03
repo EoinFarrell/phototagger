@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,11 +31,25 @@ type fakeExif struct {
 	// removedKeywordCalls records each RemoveKeywordBatch call, in order,
 	// for TestSession_DeleteKeyword assertions.
 	removedKeywordCalls []removeKeywordCall
+
+	// renamedKeywordCalls records each RenameKeywordBatch call, in order,
+	// for TestSession_RenameKeyword assertions.
+	renamedKeywordCalls []renameKeywordCall
+
+	// renameErr, if set, is returned by RenameKeywordBatch instead of nil --
+	// used to prove a failed rewrite leaves the known-keywords list
+	// unchanged (TestSession_RenameKeyword_LeavesStoreUnchangedOnExifError).
+	renameErr error
 }
 
 type removeKeywordCall struct {
 	paths []string
 	kw    string
+}
+
+type renameKeywordCall struct {
+	paths        []string
+	oldKw, newKw string
 }
 
 func newFakeExif() *fakeExif {
@@ -91,6 +106,10 @@ func (f *fakeExif) ExtractPreview(path string) ([]byte, error) {
 func (f *fakeExif) RemoveKeywordBatch(paths []string, kw string) error {
 	f.removedKeywordCalls = append(f.removedKeywordCalls, removeKeywordCall{paths: paths, kw: kw})
 	return nil
+}
+func (f *fakeExif) RenameKeywordBatch(paths []string, oldKw, newKw string) error {
+	f.renamedKeywordCalls = append(f.renamedKeywordCalls, renameKeywordCall{paths: paths, oldKw: oldKw, newKw: newKw})
+	return f.renameErr
 }
 
 type fakeTZ struct {
@@ -776,6 +795,145 @@ func TestSession_DeleteKeyword_UnknownKeywordIsNoop(t *testing.T) {
 	}
 	if len(exif.removedKeywordCalls) != 1 {
 		t.Fatalf("expected RemoveKeywordBatch to still be called (it's safe against photos without the keyword), got %d calls", len(exif.removedKeywordCalls))
+	}
+}
+
+func TestSession_RenameKeyword_UpdatesStoreAndUsesPostRenamePaths(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+
+	// Same stale-path setup as TestSession_DeleteKeyword's post-rename case:
+	// Applying a.jpg renames it on disk, so RenameKeyword must use a fresh
+	// scan rather than allEntries' stale pre-rename path.
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("beach", "seaside"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := sess.Keywords()
+	if len(got) != 1 || got[0].Name != "seaside" {
+		t.Errorf("Keywords() = %+v, want [seaside]", got)
+	}
+
+	if len(exif.renamedKeywordCalls) != 1 {
+		t.Fatalf("expected one RenameKeywordBatch call, got %d", len(exif.renamedKeywordCalls))
+	}
+	call := exif.renamedKeywordCalls[0]
+	if call.oldKw != "beach" || call.newKw != "seaside" {
+		t.Errorf("got oldKw=%q newKw=%q, want beach/seaside", call.oldKw, call.newKw)
+	}
+	for _, p := range call.paths {
+		if filepath.Base(p) == "a.jpg" {
+			t.Errorf("RenameKeywordBatch called with a.jpg's stale pre-rename path %q", p)
+		}
+	}
+
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]string, len(result.Photos))
+	for i, p := range result.Photos {
+		want[i] = p.Path
+	}
+	if !reflect.DeepEqual(call.paths, want) {
+		t.Errorf("RenameKeywordBatch paths = %+v, want current on-disk scan %+v", call.paths, want)
+	}
+}
+
+func TestSession_RenameKeyword_PreservesLocation(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"concert"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+	loc := keywords.Location{Lat: 1, Lon: 2, Alt: 3}
+	if err := sess.SetKeywordLocation("concert", loc); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("concert", "gig"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := sess.Keywords()
+	if len(got) != 1 || got[0].Name != "gig" || got[0].Location == nil || *got[0].Location != loc {
+		t.Errorf("Keywords() = %+v, want \"gig\" carrying %+v", got, loc)
+	}
+}
+
+func TestSession_RenameKeyword_NoopWhenNamesEqual(t *testing.T) {
+	sess, _, exif := newTestSession(t)
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("beach", "beach"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exif.renamedKeywordCalls) != 0 {
+		t.Errorf("renaming to the same name must not touch any file, got %d RenameKeywordBatch calls", len(exif.renamedKeywordCalls))
+	}
+}
+
+func TestSession_RenameKeyword_RejectsBlankNewName(t *testing.T) {
+	sess, _, exif := newTestSession(t)
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("beach", "   "); err == nil {
+		t.Fatal("expected error renaming to a blank name")
+	}
+	if len(exif.renamedKeywordCalls) != 0 {
+		t.Errorf("a rejected rename must not touch any file, got %d RenameKeywordBatch calls", len(exif.renamedKeywordCalls))
+	}
+}
+
+// TestSession_RenameKeyword_RejectsCollisionBeforeTouchingFiles guards that
+// the destination-name collision check happens before the directory-wide
+// EXIF rewrite, not just inside keywords.Store.Rename afterwards -- a
+// rejected rename must never touch a single file on disk.
+func TestSession_RenameKeyword_RejectsCollisionBeforeTouchingFiles(t *testing.T) {
+	sess, _, exif := newTestSession(t)
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach", "family"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("beach", "family"); err == nil {
+		t.Fatal("expected error renaming onto an existing different keyword")
+	}
+	if len(exif.renamedKeywordCalls) != 0 {
+		t.Errorf("a rejected rename must not touch any file, got %d RenameKeywordBatch calls", len(exif.renamedKeywordCalls))
+	}
+}
+
+// TestSession_RenameKeyword_LeavesStoreUnchangedOnExifError guards the
+// ordering established for DeleteKeyword: the directory-wide EXIF rewrite
+// happens before the local keywords.json update, so a failed rewrite must
+// not have already renamed the keyword in the known list.
+func TestSession_RenameKeyword_LeavesStoreUnchangedOnExifError(t *testing.T) {
+	sess, _, exif := newTestSession(t)
+	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach"}, KeywordsTouched: true}
+	if _, err := sess.Apply(req); err != nil {
+		t.Fatal(err)
+	}
+	exif.renameErr = fmt.Errorf("exiftool exploded")
+
+	if err := sess.RenameKeyword("beach", "seaside"); err == nil {
+		t.Fatal("expected the EXIF rewrite failure to propagate")
+	}
+
+	got := sess.Keywords()
+	if len(got) != 1 || got[0].Name != "beach" {
+		t.Errorf("Keywords() = %+v, want [beach] unchanged after a failed rewrite", got)
 	}
 }
 

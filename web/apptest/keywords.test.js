@@ -2,55 +2,27 @@
 // Covers the "previously used keywords" pills: clicking a pill toggles that
 // keyword in the keywords field instead of making the user retype and
 // remember it, a pill already present in the field renders .active (and
-// clicking it again removes it), a keyword just Applied becomes available
-// as a pill immediately (optimistic local mirror of the keywords.json the
-// server persists in internal/server/session.go's Apply) without waiting on
-// a fresh /api/keywords round trip, and each pill's × button deletes that
-// keyword everywhere via DELETE /api/keywords (internal/server/session.go's
-// DeleteKeyword), after a confirm() prompt. Also covers the per-keyword
-// saved Location: a pill carrying one shows a pin marker and snaps the map
-// to it when clicked to add the keyword (never when clicked to remove it),
-// and the "Manage keyword locations" section's set/clear actions against
-// POST/DELETE /api/keywords/location (internal/server/session.go's
-// SetKeywordLocation/ClearKeywordLocation).
+// clicking it again removes it), and a keyword just Applied becomes
+// available as a pill immediately (optimistic local mirror of the
+// keywords.json the server persists in internal/server/session.go's Apply)
+// without waiting on a fresh /api/keywords round trip. Also covers the
+// per-keyword saved Location: a pill carrying one shows a pin marker and
+// snaps the map to it when clicked to add the keyword (never when clicked
+// to remove it), and the "Manage keyword locations" section's set/clear
+// actions against POST/DELETE /api/keywords/location
+// (internal/server/session.go's SetKeywordLocation/ClearKeywordLocation).
+// Deleting and renaming a keyword live on the separate manage-view instead
+// of on the pill itself -- see keyword-management.test.js.
 //
 // Run with: node --test web/apptest/keywords.test.js
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  flushMicrotasks, click, clickKeywordPill, clickKeywordDeletePill,
-  clickKeywordLocationSet, clickKeywordLocationClear, photoResponse, loadApp,
+  flushMicrotasks, click, clickKeywordPill,
+  clickKeywordLocationSet, clickKeywordLocationClear,
+  photoResponse, startSessionWithKeywords,
 } = require('./testutil');
-
-// GET /api/keywords (and the set/clear-location responses that echo the
-// same shape) return [{name, location}, ...]; most tests here don't care
-// about Location, so this lets them keep passing plain name strings.
-function toKeywordObjs(keywords) {
-  return keywords.map((k) => (typeof k === 'string' ? { name: k, location: null } : k));
-}
-
-// Drives the app through the start screen with a given set of already-known
-// keywords, mirroring startSession() in testutil.js but letting the test
-// control the /api/keywords response and, optionally, the first photo's
-// existing fields (e.g. keywords already in that photo's EXIF).
-async function startSessionWithKeywords(keywords, existing) {
-  const app = loadApp();
-  const { fetchMock } = app;
-
-  click(app.elements['start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/start', { ok: true });
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/favourites', []);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(keywords));
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/photo/current', photoResponse(0, existing));
-  await flushMicrotasks();
-
-  return app;
-}
 
 test('known keywords render as clickable pills', async () => {
   const { elements } = await startSessionWithKeywords(['beach', 'family']);
@@ -113,76 +85,6 @@ test('a keyword already on the photo (e.g. tagged outside this tool) becomes a p
   const { elements } = await startSessionWithKeywords([], { keywords: ['archive'] });
 
   assert.match(elements['keyword-pills'].innerHTML, /class="keyword-pill active" data-keyword="archive">archive</);
-});
-
-test('each pill renders a paired delete button', async () => {
-  const { elements } = await startSessionWithKeywords(['beach']);
-
-  assert.match(elements['keyword-pills'].innerHTML, /class="keyword-pill-delete" data-keyword="beach"/);
-});
-
-test('deleting a pill asks for confirmation, then calls DELETE /api/keywords and drops it from the field and pill list', async () => {
-  const { elements, fetchMock, confirms } = await startSessionWithKeywords(['beach', 'family'], { keywords: ['beach'] });
-  assert.equal(elements['keywords-input'].value, 'beach');
-
-  clickKeywordDeletePill(elements, 'beach');
-  await flushMicrotasks();
-
-  assert.equal(confirms.length, 1, 'expected a confirm() prompt before deleting');
-  assert.match(confirms[0], /Delete "beach"/);
-
-  const del = fetchMock.log.find((e) => e.method === 'DELETE' && e.url.includes('/api/keywords'));
-  assert.ok(del, 'expected a DELETE /api/keywords request');
-  assert.deepEqual(del.body, { keyword: 'beach' });
-
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['family']));
-  await flushMicrotasks();
-
-  assert.equal(elements['keywords-input'].value, '', 'deleted keyword must be dropped from the current field too');
-  assert.doesNotMatch(elements['keyword-pills'].innerHTML, /data-keyword="beach"/);
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="family"/);
-});
-
-test('deleting a pill does not drop other keywords merged only from the current photo\'s EXIF', async () => {
-  // 'family' arrives solely via mergeKnownKeywords reading this photo's
-  // existing EXIF (see app.js) -- nothing has been Applied yet, so the
-  // server's keywords.json has never heard of it. Deleting 'beach' must not
-  // wipe it out by replacing knownKeywords with the server's (incomplete)
-  // list.
-  const { elements, fetchMock } = await startSessionWithKeywords(['beach'], { keywords: ['beach', 'family'] });
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="family"/);
-
-  clickKeywordDeletePill(elements, 'beach');
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs([]));
-  await flushMicrotasks();
-
-  assert.doesNotMatch(elements['keyword-pills'].innerHTML, /data-keyword="beach"/);
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="family"/, 'optimistically-merged keyword must survive an unrelated delete');
-});
-
-test('canceling the delete confirmation makes no request and leaves the pill in place', async () => {
-  const { elements, fetchMock, confirmState } = await startSessionWithKeywords(['beach']);
-  confirmState.result = false;
-
-  clickKeywordDeletePill(elements, 'beach');
-  await flushMicrotasks();
-
-  assert.equal(fetchMock.countPending('/api/keywords'), 0, 'must not call the server when the user cancels');
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="beach"/);
-});
-
-test('a failed delete surfaces an alert and leaves the pill in place', async () => {
-  const { elements, fetchMock, alerts } = await startSessionWithKeywords(['beach']);
-
-  clickKeywordDeletePill(elements, 'beach');
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', { error: 'boom' }, { ok: false });
-  await flushMicrotasks();
-
-  assert.equal(alerts.length, 1);
-  assert.match(alerts[0], /boom/);
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="beach"/);
 });
 
 // ---- Keyword-location association ----

@@ -56,10 +56,14 @@ class FakeElement {
 // way a real DOM would. Ids with no entry here fall back to a plain DIV,
 // which is fine for elements the shortcut guards never inspect.
 const ELEMENT_META = {
-  'start-view': [], 'tag-view': [], 'done-view': [], 'start-summary': [],
+  'start-view': [], 'tag-view': [], 'manage-view': [], 'done-view': [], 'start-summary': [],
   'mode-count-all': [], 'mode-count-non-tagged': [], 'mode-count-tagged': [],
   'geo-count-all': [], 'geo-count-missing-gps': [],
   'start-button': ['BUTTON'],
+  'manage-keywords-start-button': ['BUTTON'],
+  'manage-keywords-tag-button': ['BUTTON'],
+  'manage-back-button': ['BUTTON'],
+  'manage-keywords-list': [],
   'favourite-select': ['SELECT'],
   'save-favourite-button': ['BUTTON'],
   'favourite-name-input': ['INPUT', 'text'],
@@ -220,10 +224,17 @@ function loadApp() {
   const fetchMock = buildFetchMock();
   const alerts = [];
   const confirms = [];
+  const prompts = [];
   // deleteKeyword's confirm() gate defaults to "OK" so tests that don't care
   // about the prompt (most of them) aren't forced to set this up -- tests
   // covering the cancel path set it to false via the returned confirm object.
   const confirmState = { result: true };
+  // renameKeyword's prompt() gate defaults to returning its own default
+  // value unchanged (the second prompt() argument -- the keyword's current
+  // name) so tests that don't care about renaming aren't forced to set this
+  // up; a test covering rename sets promptState.result to the new name, and
+  // the cancel path sets it to null (prompt()'s own "Cancel" return value).
+  const promptState = { result: undefined };
 
   const sandbox = {
     document,
@@ -231,6 +242,10 @@ function loadApp() {
     fetch: fetchMock,
     alert: (msg) => alerts.push(msg),
     confirm: (msg) => { confirms.push(msg); return confirmState.result; },
+    prompt: (msg, defaultValue) => {
+      prompts.push(msg);
+      return promptState.result === undefined ? defaultValue : promptState.result;
+    },
     console,
     Date, JSON, Math, parseFloat, parseInt, Object, Array, Promise, setTimeout, clearTimeout, setImmediate,
   };
@@ -240,7 +255,10 @@ function loadApp() {
   vm.runInContext(formStateSrc, sandbox, { filename: FORM_STATE_JS });
   vm.runInContext(src, sandbox, { filename: APP_JS });
 
-  return { elements, fetchMock, alerts, confirms, confirmState, created, document, modeRadios, geoRadios };
+  return {
+    elements, fetchMock, alerts, confirms, confirmState, prompts, promptState,
+    created, document, modeRadios, geoRadios,
+  };
 }
 
 // Loads formstate.js alone, without app.js or any DOM/Leaflet stubs, so its
@@ -275,12 +293,22 @@ function clickKeywordPill(elements, keyword) {
   elements['keyword-pills'].dispatchEvent({ type: 'click', target: pill });
 }
 
-// Same as clickKeywordPill, but for a pill's × delete button.
-function clickKeywordDeletePill(elements, keyword) {
-  const btn = new FakeElement(`keyword-pill-delete-${keyword}`, 'BUTTON');
-  btn.classList.add('keyword-pill-delete');
+// Simulates clicking a manage-view row's "Rename" button -- same
+// stand-in-target pattern as clickKeywordPill, for app.js's
+// #manage-keywords-list delegated click handler.
+function clickManageRename(elements, keyword) {
+  const btn = new FakeElement(`manage-keyword-rename-${keyword}`, 'BUTTON');
+  btn.classList.add('manage-keyword-rename');
   btn.dataset.keyword = keyword;
-  elements['keyword-pills'].dispatchEvent({ type: 'click', target: btn });
+  elements['manage-keywords-list'].dispatchEvent({ type: 'click', target: btn });
+}
+
+// Same as clickManageRename, but for a row's "Delete" button.
+function clickManageDelete(elements, keyword) {
+  const btn = new FakeElement(`manage-keyword-delete-${keyword}`, 'BUTTON');
+  btn.classList.add('manage-keyword-delete');
+  btn.dataset.keyword = keyword;
+  elements['manage-keywords-list'].dispatchEvent({ type: 'click', target: btn });
 }
 
 // Simulates clicking a keyword-location-management row's "Set to current
@@ -345,8 +373,39 @@ async function startSession() {
   return app;
 }
 
+// GET /api/keywords (and the set/clear-location/rename responses that echo
+// the same shape) return [{name, location}, ...]; most tests don't care
+// about Location, so this lets them keep passing plain name strings.
+function toKeywordObjs(keywords) {
+  return keywords.map((k) => (typeof k === 'string' ? { name: k, location: null } : k));
+}
+
+// Drives the app through the start screen with a given set of already-known
+// keywords, mirroring startSession() above but letting the test control the
+// /api/keywords response and, optionally, the first photo's existing
+// fields (e.g. keywords already in that photo's EXIF).
+async function startSessionWithKeywords(keywords, existing) {
+  const app = loadApp();
+  const { fetchMock } = app;
+
+  click(app.elements['start-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/start', { ok: true });
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/favourites', []);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(keywords));
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/photo/current', photoResponse(0, existing));
+  await flushMicrotasks();
+
+  return app;
+}
+
 module.exports = {
   buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
-  loadApp, loadFormStateModule, click, clickKeywordPill, clickKeywordDeletePill,
-  clickKeywordLocationSet, clickKeywordLocationClear, keydown, photoResponse, startSession,
+  loadApp, loadFormStateModule, click, clickKeywordPill,
+  clickKeywordLocationSet, clickKeywordLocationClear,
+  clickManageRename, clickManageDelete, keydown, photoResponse, startSession,
+  toKeywordObjs, startSessionWithKeywords,
 };

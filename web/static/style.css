@@ -83,23 +83,39 @@ legend {
 #mode-select label,
 #geo-select label { display: flex; align-items: center; gap: 0.3rem; }
 
+#start-actions { display: flex; align-items: center; gap: 0.75rem; }
+#start-actions button { width: auto; }
+
+#manage-keywords-list {
+  list-style: none;
+  margin: 1rem 0 0;
+  padding: 0;
+}
+
+#manage-keywords-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.manage-keyword-name { flex: 1; font-weight: bold; }
+.manage-keyword-rename,
+.manage-keyword-delete { width: auto; margin: 0; }
+
 /* Column, not row: side-by-side made the button's long label squeeze the
    name input down to a sliver (or an empty box on narrower windows). */
 #save-favourite-row { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
 
 #keyword-pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
 
-/* Each pill is really two buttons (toggle + delete) joined into one chip:
-   shared left/right radius and no gap between them, with a border seam at
-   the join from keyword-pill-delete's left border. */
-.keyword-pill-group { display: inline-flex; }
-
-.keyword-pill,
-.keyword-pill-delete {
+.keyword-pill {
   width: auto;
   margin: 0;
   padding: 0.15rem 0.7rem;
   font-size: 0.8em;
+  border-radius: 999px;
   background: transparent;
   /* Pico's own button{} rule scopes --pico-color to its primary-inverse
      (near-white) value for filled buttons; reset it here or this pill's
@@ -109,29 +125,13 @@ legend {
   border-color: var(--pico-muted-border-color);
 }
 
-.keyword-pill {
-  border-radius: 999px 0 0 999px;
-  border-right: none;
-}
-
-.keyword-pill-delete {
-  border-radius: 0 999px 999px 0;
-  padding: 0.15rem 0.55rem;
-  line-height: 1;
-}
-
-.keyword-pill.active,
-.keyword-pill-delete.active {
+.keyword-pill.active {
   background: var(--pico-primary);
   color: var(--pico-primary-inverse);
   border-color: var(--pico-primary);
 }
 
-.keyword-pill-delete:hover {
-  background: #d63535;
-  color: #fff;
-  border-color: #d63535;
-}
+#manage-keywords-tag-button { margin-top: 0.5rem; }
 
 #keyword-locations-list {
   list-style: none;

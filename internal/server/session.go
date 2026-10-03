@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,7 @@ type ExifClient interface {
 	WriteFields(path string, f exiftool.Fields) error
 	ExtractPreview(path string) ([]byte, error)
 	RemoveKeywordBatch(paths []string, kw string) error
+	RenameKeywordBatch(paths []string, oldKw, newKw string) error
 	ReadKeywordsBatch(paths []string) (map[string][]string, error)
 	ReadGPSPresenceBatch(paths []string) (map[string]bool, error)
 }
@@ -670,4 +672,39 @@ func (s *Session) DeleteKeyword(kw string) error {
 		return err
 	}
 	return s.keywords.Remove(kw)
+}
+
+// RenameKeyword changes oldKw's text to newKw everywhere: every photo
+// currently in the source directory that carries oldKw (re-scanned for the
+// same reason DeleteKeyword is, above -- an already-Applied photo's path in
+// allEntries/entries may be stale), and the known-keywords list itself,
+// preserving its position and any saved Location. The newKw-collision and
+// blank-name checks happen before the directory-wide rewrite below, not
+// just inside keywords.Store.Rename afterwards, so a rejected rename never
+// touches a single file on disk.
+func (s *Session) RenameKeyword(oldKw, newKw string) error {
+	newKw = strings.TrimSpace(newKw)
+	if newKw == oldKw {
+		return nil
+	}
+	if newKw == "" {
+		return fmt.Errorf("new keyword name is required")
+	}
+	if s.keywords.Exists(newKw) {
+		return fmt.Errorf("keyword %q already exists", newKw)
+	}
+
+	result, err := scan.Scan(s.SourceDir)
+	if err != nil {
+		return fmt.Errorf("rescanning %s: %w", s.SourceDir, err)
+	}
+	paths := make([]string, len(result.Photos))
+	for i, p := range result.Photos {
+		paths[i] = p.Path
+	}
+
+	if err := s.exif.RenameKeywordBatch(paths, oldKw, newKw); err != nil {
+		return err
+	}
+	return s.keywords.Rename(oldKw, newKw)
 }

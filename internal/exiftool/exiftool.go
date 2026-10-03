@@ -377,6 +377,28 @@ func (c *Client) RemoveKeywordBatch(paths []string, kw string) error {
 	return nil
 }
 
+// RenameKeywordBatch replaces oldKw with newKw across every photo in paths,
+// in a single pass per batch: a photo without oldKw is left untouched by
+// the removal half and gains newKw from the addition half, same as applying
+// -Keywords-=X to a photo that never had X -- both no-op safely, so paths
+// can be every photo in a directory. If a photo already independently
+// carries newKw, it ends up with a duplicate entry (ExifTool's += doesn't
+// dedupe) -- accepted as a rare, self-correcting edge case rather than
+// adding dedup logic for it.
+func (c *Client) RenameKeywordBatch(paths []string, oldKw, newKw string) error {
+	for start := 0; start < len(paths); start += removeKeywordBatchSize {
+		end := start + removeKeywordBatchSize
+		if end > len(paths) {
+			end = len(paths)
+		}
+		args := append([]string{"-overwrite_original", "-Keywords-=" + oldKw, "-Keywords+=" + newKw}, paths[start:end]...)
+		if _, err := c.runner.Output(args...); err != nil {
+			return fmt.Errorf("renaming keyword %q to %q for photos %d-%d: %w", oldKw, newKw, start, end, err)
+		}
+	}
+	return nil
+}
+
 func gpsArgs(lat, lon float64) []string {
 	latRef, lon2Ref := "N", "E"
 	if lat < 0 {

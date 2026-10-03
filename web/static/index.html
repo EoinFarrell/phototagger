@@ -23,7 +23,10 @@
     <label><input type="radio" name="geo" value="all" checked> All (<span id="geo-count-all">0</span>)</label>
     <label><input type="radio" name="geo" value="missing-gps"> Missing GPS (<span id="geo-count-missing-gps">0</span>)</label>
   </fieldset>
-  <button id="start-button" disabled>Start tagging</button>
+  <div id="start-actions">
+    <button id="start-button" disabled>Start tagging</button>
+    <button type="button" id="manage-keywords-start-button">Manage keywords…</button>
+  </div>
 </section>
 
 <section id="tag-view" class="view" hidden>
@@ -67,6 +70,7 @@
         </legend>
         <label>Comma-separated <input type="text" id="keywords-input"></label>
         <div id="keyword-pills"></div>
+        <button type="button" id="manage-keywords-tag-button">Manage keywords…</button>
         <details id="keyword-locations-manage">
           <summary>Manage keyword locations</summary>
           <ul id="keyword-locations-list"></ul>
@@ -94,6 +98,12 @@
     <button id="skip-button" type="button">Skip →</button>
     <button id="apply-button" type="button">Apply &amp; Next ✓</button>
   </footer>
+</section>
+
+<section id="manage-view" class="view" hidden>
+  <h1>Manage keywords</h1>
+  <button type="button" id="manage-back-button">← Back</button>
+  <ul id="manage-keywords-list"></ul>
 </section>
 
 <section id="done-view" class="view" hidden>

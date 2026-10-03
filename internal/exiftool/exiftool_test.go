@@ -535,6 +535,39 @@ func TestRemoveKeywordBatch_ChunksLargePathLists(t *testing.T) {
 	}
 }
 
+func TestRenameKeywordBatch_BuildsExpectedArgs(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{[]byte("1 image files updated")}}
+	c := NewWithRunner(r)
+
+	if err := c.RenameKeywordBatch([]string{"a.jpg", "b.jpg"}, "beach", "seaside"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(r.calls) != 1 {
+		t.Fatalf("expected 1 invocation, got %d", len(r.calls))
+	}
+	want := []string{"-overwrite_original", "-Keywords-=beach", "-Keywords+=seaside", "a.jpg", "b.jpg"}
+	if !reflect.DeepEqual(r.calls[0], want) {
+		t.Errorf("args = %v, want %v", r.calls[0], want)
+	}
+}
+
+func TestRenameKeywordBatch_ChunksLargePathLists(t *testing.T) {
+	r := &fakeRunner{outputs: [][]byte{[]byte("ok"), []byte("ok"), []byte("ok")}}
+	c := NewWithRunner(r)
+
+	paths := make([]string, removeKeywordBatchSize*2+5)
+	for i := range paths {
+		paths[i] = "p.jpg"
+	}
+
+	if err := c.RenameKeywordBatch(paths, "beach", "seaside"); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(r.calls) != 3 {
+		t.Fatalf("expected 3 batched invocations, got %d", len(r.calls))
+	}
+}
+
 func TestRemoveKeywordBatch_EmptyPathsIsNoop(t *testing.T) {
 	r := &fakeRunner{}
 	c := NewWithRunner(r)

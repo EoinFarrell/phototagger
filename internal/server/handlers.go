@@ -47,6 +47,7 @@ func NewMux(sess *Session) http.Handler {
 	mux.HandleFunc("/api/favourites", handleFavourites(sess))
 	mux.HandleFunc("/api/keywords", handleKeywords(sess))
 	mux.HandleFunc("/api/keywords/location", handleKeywordLocation(sess))
+	mux.HandleFunc("/api/keywords/rename", handleKeywordRename(sess))
 	mux.HandleFunc("/api/elevation", handleElevation(sess))
 	mux.HandleFunc("/api/timezone", handleTimezone(sess))
 
@@ -335,6 +336,34 @@ func handleKeywords(sess *Session) http.HandlerFunc {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+// handleKeywordRename changes a known keyword's text everywhere (see
+// Session.RenameKeyword) -- the tag management view's "Rename" action.
+func handleKeywordRename(sess *Session) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			OldKeyword string `json:"oldKeyword"`
+			NewKeyword string `json:"newKeyword"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if req.OldKeyword == "" {
+			writeError(w, http.StatusBadRequest, errKeywordRequired)
+			return
+		}
+		if err := sess.RenameKeyword(req.OldKeyword, req.NewKeyword); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, sess.Keywords())
 	}
 }
 

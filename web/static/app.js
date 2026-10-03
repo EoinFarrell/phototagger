@@ -30,6 +30,7 @@ function escapeHtml(s) {
 function switchView(name) {
   $('start-view').hidden = name !== 'start';
   $('tag-view').hidden = name !== 'tag';
+  $('manage-view').hidden = name !== 'manage';
   $('done-view').hidden = name !== 'done';
 }
 
@@ -232,21 +233,18 @@ function findKnownKeyword(kw) {
 
 // Pills double as a legend for what's already in the field: one already
 // present in keywords-input renders .active, and clicking it again removes
-// it from the field (toggle), keeping the pill and the field in sync. Each
-// pill pairs with a small × button that deletes the keyword everywhere
-// (see deleteKeyword) rather than just from this photo. A keyword carrying
-// a saved Location (see renderKeywordLocations below) gets a pin marker, so
-// it's visible before clicking that doing so will also move the map.
+// it from the field (toggle), keeping the pill and the field in sync. A
+// keyword carrying a saved Location (see renderKeywordLocations below) gets
+// a pin marker, so it's visible before clicking that doing so will also
+// move the map. Renaming/deleting a keyword lives on the manage-view
+// instead of on the pill itself (see "Manage keywords…").
 function renderKeywordPills() {
   const current = new Set(parseKeywords($('keywords-input').value));
   $('keyword-pills').innerHTML = knownKeywords.map((kw) => {
     const active = current.has(kw.name) ? ' active' : '';
     const esc = escapeHtml(kw.name);
     const pin = kw.location ? '📍 ' : '';
-    return `<span class="keyword-pill-group">` +
-      `<button type="button" class="keyword-pill${active}" data-keyword="${esc}">${pin}${esc}</button>` +
-      `<button type="button" class="keyword-pill-delete${active}" data-keyword="${esc}" title="Delete “${esc}” from every photo in this folder" aria-label="Delete ${esc}">×</button>` +
-      `</span>`;
+    return `<button type="button" class="keyword-pill${active}" data-keyword="${esc}">${pin}${esc}</button>`;
   }).join('');
 }
 
@@ -299,7 +297,8 @@ function mergeKnownKeywords(kws) {
 // the source directory that currently has it (not just the one on screen),
 // via DELETE /api/keywords -- see internal/server/session.go's
 // DeleteKeyword. Confirmed first since, unlike the rest of this form, it
-// writes to disk immediately rather than waiting for Apply.
+// writes to disk immediately rather than waiting for Apply. Called from the
+// manage-view's "Delete" button (see "---- Keyword management ----" below).
 async function deleteKeyword(kw) {
   if (!confirm(`Delete "${kw}"?\n\nThis removes it from every photo in this folder that has it, not just this one, and can't be undone from here.`)) {
     return;
@@ -329,18 +328,100 @@ async function deleteKeyword(kw) {
   });
   renderKeywordPills();
   renderKeywordLocations();
+  renderManageKeywordsList();
+}
+
+// Renames kw to a new name everywhere -- every photo in the folder carrying
+// it, and the known-keywords list itself (preserving its Location) -- via
+// POST /api/keywords/rename (internal/server/session.go's RenameKeyword).
+// Prompts for the new name rather than an inline editable field, matching
+// this app's existing lightweight alert()/confirm() interaction style
+// instead of adding per-row input-field state. A cancelled prompt (null) or
+// one left unchanged/blank is a silent no-op.
+async function renameKeyword(kw) {
+  const newName = prompt(`Rename "${kw}" to:`, kw);
+  if (newName === null) return;
+  const trimmed = newName.trim();
+  if (trimmed === '' || trimmed === kw) return;
+
+  const res = await fetch('/api/keywords/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldKeyword: kw, newKeyword: trimmed }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(`Failed to rename "${kw}": ${body.error || res.statusText}`);
+    return;
+  }
+  knownKeywords = await res.json();
+  // If the field being edited still has the old name queued (not yet
+  // Applied), carry the rename into it too, rather than leaving a now-
+  // nonexistent keyword sitting in the current photo's field.
+  formState.applyProgrammaticUpdate(() => {
+    const current = parseKeywords($('keywords-input').value);
+    const idx = current.indexOf(kw);
+    if (idx !== -1) {
+      current[idx] = trimmed;
+      $('keywords-input').value = current.join(', ');
+    }
+  });
+  renderKeywordPills();
+  renderKeywordLocations();
+  renderManageKeywordsList();
 }
 
 $('keyword-pills').addEventListener('click', formState.guardedField((e) => {
-  const delBtn = e.target.closest('.keyword-pill-delete');
-  if (delBtn) {
-    deleteKeyword(delBtn.dataset.keyword);
-    return;
-  }
   const btn = e.target.closest('.keyword-pill');
   if (!btn) return;
   toggleKeyword(btn.dataset.keyword);
 }));
+
+// ---- Keyword management (rename/delete) ----
+
+// Renders a row per known keyword in the manage-view: its name and a
+// Rename/Delete pair. Kept as its own full-page view (reached via "Manage
+// keywords…" from the start screen or the tagging form) rather than inline
+// per-pill controls, since deleting or renaming a keyword acts on every
+// photo in the folder, not just the one on screen -- worth a deliberate
+// destination rather than a stray click on a quick-pick pill.
+function renderManageKeywordsList() {
+  $('manage-keywords-list').innerHTML = knownKeywords.map((kw) => {
+    const esc = escapeHtml(kw.name);
+    return `<li>` +
+      `<span class="manage-keyword-name">${esc}</span>` +
+      `<button type="button" class="manage-keyword-rename" data-keyword="${esc}">Rename</button>` +
+      `<button type="button" class="manage-keyword-delete" data-keyword="${esc}">Delete</button>` +
+      `</li>`;
+  }).join('');
+}
+
+// Tracks which view "Manage keywords…" was opened from, so the back button
+// returns there instead of always landing on one fixed view.
+let manageReturnView = 'start';
+
+async function openManageKeywords(returnView) {
+  manageReturnView = returnView;
+  await loadKeywords();
+  renderManageKeywordsList();
+  switchView('manage');
+}
+
+$('manage-keywords-start-button').addEventListener('click', () => openManageKeywords('start'));
+$('manage-keywords-tag-button').addEventListener('click', formState.guarded(() => openManageKeywords('tag')));
+$('manage-back-button').addEventListener('click', () => switchView(manageReturnView));
+
+$('manage-keywords-list').addEventListener('click', (e) => {
+  const renameBtn = e.target.closest('.manage-keyword-rename');
+  if (renameBtn) {
+    renameKeyword(renameBtn.dataset.keyword);
+    return;
+  }
+  const delBtn = e.target.closest('.manage-keyword-delete');
+  if (delBtn) {
+    deleteKeyword(delBtn.dataset.keyword);
+  }
+});
 
 // ---- Keyword location management ----
 

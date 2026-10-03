@@ -128,6 +128,46 @@ func (s *Store) Remove(kw string) error {
 	return s.saveLocked()
 }
 
+// Exists reports whether name is already a known keyword -- used to check
+// a Rename's destination name for a collision before the caller does any
+// destructive work (rewriting every photo's EXIF) based on it.
+func (s *Store) Exists(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.index[name]
+	return ok
+}
+
+// Rename changes oldName's text to newName, preserving its position and
+// Location, then persists the store to disk. A no-op if newName equals
+// oldName (after trimming). Returns an error if oldName isn't known,
+// newName is blank, or newName already belongs to a different known
+// keyword -- the caller is expected to have already checked Exists before
+// doing any destructive work this depends on succeeding.
+func (s *Store) Rename(oldName, newName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	newName = strings.TrimSpace(newName)
+	if newName == oldName {
+		return nil
+	}
+	if newName == "" {
+		return fmt.Errorf("new keyword name is required")
+	}
+	i, ok := s.index[oldName]
+	if !ok {
+		return fmt.Errorf("unknown keyword %q", oldName)
+	}
+	if _, exists := s.index[newName]; exists {
+		return fmt.Errorf("keyword %q already exists", newName)
+	}
+	s.keywords[i].Name = newName
+	delete(s.index, oldName)
+	s.index[newName] = i
+	return s.saveLocked()
+}
+
 // SetLocation sets (loc non-nil) or clears (loc nil) kw's saved Location,
 // then persists the store to disk. Returns an error if kw isn't known --
 // the management UI only ever offers this for a keyword already in the
