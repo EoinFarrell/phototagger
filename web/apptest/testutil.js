@@ -64,15 +64,20 @@ const ELEMENT_META = {
   'manage-keywords-tag-button': ['BUTTON'],
   'manage-back-button': ['BUTTON'],
   'manage-keywords-list': [],
-  'favourite-select': ['SELECT'],
-  'save-favourite-button': ['BUTTON'],
-  'favourite-name-input': ['INPUT', 'text'],
+  'manage-location-editor': [],
+  'manage-location-keyword': [],
+  'manage-location-status': [],
+  'manage-location-save-button': ['BUTTON'],
+  'manage-location-clear-button': ['BUTTON'],
+  'manage-location-cancel-button': ['BUTTON'],
+  'located-keyword-pills': [],
+  'save-located-keyword-button': ['BUTTON'],
+  'located-keyword-name-input': ['INPUT', 'text'],
   'datetime-input': ['INPUT', 'datetime-local'],
   'offset-input': ['INPUT', 'text'],
   'altitude-input': ['INPUT', 'number'],
   'keywords-input': ['INPUT', 'text'],
   'keyword-pills': [],
-  'keyword-locations-list': [],
   'caption-input': ['TEXTAREA'],
   'additional-details': [], 'additional-required-badge': [],
   'tag-progress': [], 'tag-relpath': [], 'preview-img': [],
@@ -138,14 +143,16 @@ function buildFakeLeaflet() {
   const created = { maps: [], markers: [] };
 
   const L = {
-    map: () => {
+    map: (containerId) => {
       const handlers = {};
       const mapObj = {
+        containerId,
         lastView: null,
+        invalidateSize() {},
         setView(latlng, zoom) { this.lastView = { latlng, zoom }; return this; },
         getZoom() { return this.lastView ? this.lastView.zoom : 6; },
         on(evt, cb) { (handlers[evt] = handlers[evt] || []).push(cb); },
-        removeLayer() {},
+        removeLayer(layer) { if (layer) layer.map = null; },
         addLayer() {},
         // test helper: simulate a real user map click
         _simulateClick(lat, lng) {
@@ -164,7 +171,7 @@ function buildFakeLeaflet() {
         setLatLng(ll) {
           if (Array.isArray(ll)) { lat = ll[0]; lng = ll[1]; } else { lat = ll.lat; lng = ll.lng; }
         },
-        addTo() { return markerObj; },
+        addTo(m) { markerObj.map = m; return markerObj; },
         on() {},
       };
       created.markers.push(markerObj);
@@ -219,7 +226,7 @@ async function flushMicrotasks(n = 10) {
 function loadApp() {
   const formStateSrc = fs.readFileSync(FORM_STATE_JS, 'utf8');
   const src = fs.readFileSync(APP_JS, 'utf8');
-  const { document, elements, modeRadios, geoRadios } = buildDom();
+  const { document, elements, sameAsPrevButtons, modeRadios, geoRadios } = buildDom();
   const { L, created } = buildFakeLeaflet();
   const fetchMock = buildFetchMock();
   const alerts = [];
@@ -257,7 +264,7 @@ function loadApp() {
 
   return {
     elements, fetchMock, alerts, confirms, confirmState, prompts, promptState,
-    created, document, modeRadios, geoRadios,
+    created, document, sameAsPrevButtons, modeRadios, geoRadios,
   };
 }
 
@@ -311,22 +318,21 @@ function clickManageDelete(elements, keyword) {
   elements['manage-keywords-list'].dispatchEvent({ type: 'click', target: btn });
 }
 
-// Simulates clicking a keyword-location-management row's "Set to current
-// pin" button -- same stand-in-target pattern as clickKeywordPill, for
-// app.js's #keyword-locations-list delegated click handler.
-function clickKeywordLocationSet(elements, keyword) {
-  const btn = new FakeElement(`kw-loc-set-${keyword}`, 'BUTTON');
-  btn.classList.add('kw-loc-set');
-  btn.dataset.keyword = keyword;
-  elements['keyword-locations-list'].dispatchEvent({ type: 'click', target: btn });
+// Same as clickKeywordPill, but for a located keyword's pill, which
+// renders into the Location section's #located-keyword-pills instead.
+function clickLocatedKeywordPill(elements, keyword) {
+  const pill = new FakeElement(`located-keyword-pill-${keyword}`, 'BUTTON');
+  pill.classList.add('keyword-pill');
+  pill.dataset.keyword = keyword;
+  elements['located-keyword-pills'].dispatchEvent({ type: 'click', target: pill });
 }
 
-// Same as clickKeywordLocationSet, but for a row's "Clear" button.
-function clickKeywordLocationClear(elements, keyword) {
-  const btn = new FakeElement(`kw-loc-clear-${keyword}`, 'BUTTON');
-  btn.classList.add('kw-loc-clear');
+// Same as clickManageRename, but for a row's "Edit location" button.
+function clickManageEditLocation(elements, keyword) {
+  const btn = new FakeElement(`manage-keyword-location-${keyword}`, 'BUTTON');
+  btn.classList.add('manage-keyword-location');
   btn.dataset.keyword = keyword;
-  elements['keyword-locations-list'].dispatchEvent({ type: 'click', target: btn });
+  elements['manage-keywords-list'].dispatchEvent({ type: 'click', target: btn });
 }
 
 // Simulates a keydown bubbling up to the document, the same path app.js's
@@ -363,8 +369,6 @@ async function startSession() {
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/start', { ok: true });
   await flushMicrotasks();
-  fetchMock.resolveMatching('/api/favourites', []);
-  await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords', []);
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
@@ -392,8 +396,6 @@ async function startSessionWithKeywords(keywords, existing) {
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/start', { ok: true });
   await flushMicrotasks();
-  fetchMock.resolveMatching('/api/favourites', []);
-  await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords', toKeywordObjs(keywords));
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/photo/current', photoResponse(0, existing));
@@ -405,7 +407,7 @@ async function startSessionWithKeywords(keywords, existing) {
 module.exports = {
   buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
   loadApp, loadFormStateModule, click, clickKeywordPill,
-  clickKeywordLocationSet, clickKeywordLocationClear,
+  clickLocatedKeywordPill, clickManageEditLocation,
   clickManageRename, clickManageDelete, keydown, photoResponse, startSession,
   toKeywordObjs, startSessionWithKeywords,
 };

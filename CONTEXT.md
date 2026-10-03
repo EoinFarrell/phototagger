@@ -63,14 +63,14 @@ untouched mirror of the Source directory before any Photo is edited. Always mirr
 Source's folder structure exactly — no user-facing layout option, since it's a safety
 copy rather than something browsed.
 
-**Favourite**:
-A named, saved location — `{name, lat, lon, alt}` — stored in `locations.json`, a single
-file next to the binary shared across every run of the tool (not scoped to a Source
-directory or session). Selecting a Favourite snaps the map pin to its coordinates and
-altitude without an elevation lookup.
-_Avoid_: saved location, bookmark, place
+**Located keyword**:
+A keyword carrying a saved Location — `{lat, lon, alt}` — stored with every other known
+keyword in `keywords.json`, shared across every run of the tool (not scoped to a Source
+directory or session). Picking a located keyword snaps the map pin to its coordinates
+and altitude without an elevation lookup, and adds the keyword to the Photo.
+_Avoid_: favourite, saved location, bookmark, place
 
 **Location slug**:
-The place-name component of a renamed Photo's filename: the selected Favourite's name,
-or a reverse-geocoded city/town name for a freehand pin, or omitted if neither is
-available.
+The place-name component of a renamed Photo's filename: the name of the located keyword
+the pin is snapped to, or a reverse-geocoded city/town name for a freehand pin, or
+omitted if neither is available.

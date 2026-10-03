@@ -1,10 +1,12 @@
 'use strict';
 
 let map, marker;
-let favourites = [];
 let knownKeywords = [];
 let previousData = {};
-let selectedFavouriteName = '';
+// The located keyword the pin is snapped to, if any -- it names the
+// renamed file (the Apply payload's locatedKeyword). Cleared by moving the
+// pin by hand, not by removing the keyword from the Keywords field.
+let snappedLocatedKeyword = '';
 let offsetManuallyEdited = false;
 // Owns the busy flag, the Touched-field set, and the programmatic-write
 // guard (formerly `busy`, `touched`, `settingProgrammatically` here) behind
@@ -73,7 +75,6 @@ $('start-button').addEventListener('click', async () => {
   });
   switchView('tag');
   initMap();
-  await loadFavourites();
   await loadKeywords();
   const res = await fetch('/api/photo/current');
   renderCurrent(await res.json());
@@ -81,12 +82,19 @@ $('start-button').addEventListener('click', async () => {
 
 // ---- Map ----
 
-function initMap() {
-  map = L.map('map').setView([53.35, -6.26], 6);
+// Both maps (the tagging form's and the manage-view's location editor)
+// share one starting view and tile source.
+function createMap(containerId) {
+  const m = L.map(containerId).setView([53.35, -6.26], 6);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19,
-  }).addTo(map);
+  }).addTo(m);
+  return m;
+}
+
+function initMap() {
+  map = createMap('map');
   map.on('click', formState.guardedField((e) => {
     setMarker(e.latlng.lat, e.latlng.lng);
     onManualPin(e.latlng.lat, e.latlng.lng);
@@ -115,9 +123,8 @@ function clearMarker() {
 
 function onManualPin(lat, lon) {
   formState.touch('location');
-  selectedFavouriteName = '';
+  snappedLocatedKeyword = '';
   offsetManuallyEdited = false;
-  $('favourite-select').value = '';
   formState.requestElevation(lat, lon, (alt) => { $('altitude-input').value = alt; });
   maybeResolveTimezone();
 }
@@ -162,69 +169,39 @@ async function maybeResolveTimezone() {
   }
 }
 
-// ---- Favourites ----
-
-async function loadFavourites() {
-  const res = await fetch('/api/favourites');
-  favourites = await res.json();
-  populateFavouriteSelect();
-}
-
-function populateFavouriteSelect() {
-  const sel = $('favourite-select');
-  const current = sel.value;
-  sel.innerHTML = '<option value="">— freehand pin —</option>' +
-    favourites.map((f) => `<option value="${escapeHtml(f.name)}">${escapeHtml(f.name)}</option>`).join('');
-  sel.value = current;
-}
-
-$('favourite-select').addEventListener('change', formState.guarded((e) => {
-  const name = e.target.value;
-  if (!name) return;
-  const fav = favourites.find((f) => f.name === name);
-  if (!fav) return;
-  formState.applyProgrammaticUpdate(() => setMarker(fav.lat, fav.lon));
-  formState.invalidateElevation();
-  $('altitude-input').value = fav.alt;
-  formState.touch('location');
-  selectedFavouriteName = fav.name;
-  offsetManuallyEdited = false;
-  maybeResolveTimezone();
-}));
-
-$('save-favourite-button').addEventListener('click', formState.guarded(async () => {
-  if (!marker) {
-    alert('Drop a pin on the map first.');
-    return;
-  }
-  const name = $('favourite-name-input').value.trim();
-  if (!name) {
-    alert('Enter a name for this location.');
-    return;
-  }
-  const altVal = $('altitude-input').value;
-  if (altVal === '') {
-    alert('Altitude is still loading — wait a moment, or enter it manually, then try again.');
-    return;
-  }
-  const ll = marker.getLatLng();
-  const alt = parseFloat(altVal);
-  const res = await fetch('/api/favourites', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, lat: ll.lat, lon: ll.lng, alt }),
-  });
-  favourites = await res.json();
-  populateFavouriteSelect();
-  $('favourite-name-input').value = '';
-}));
-
 // ---- Keywords ----
 
 async function loadKeywords() {
   const res = await fetch('/api/keywords');
   knownKeywords = await res.json();
   renderKeywordPills();
-  renderKeywordLocations();
+}
+
+// Replaces knownKeywords with the server's list (as returned by every
+// keyword-changing endpoint), keeping any keyword only on the current
+// photo's field -- e.g. from an unApplied photo's existing EXIF -- which
+// the server's keywords.json doesn't know about yet.
+function replaceKnownKeywords(list) {
+  knownKeywords = list;
+  mergeKnownKeywords(parseKeywords($('keywords-input').value));
+  renderKeywordPills();
+}
+
+// Sets kw's Location via POST /api/keywords/location (creating kw if it's
+// new), writing immediately rather than waiting for Apply. Returns whether
+// it succeeded, having already alerted if not.
+async function saveKeywordLocation(kw, lat, lon, alt) {
+  const res = await fetch('/api/keywords/location', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keyword: kw, lat, lon, alt }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(`Failed to save location for "${kw}": ${body.error || res.statusText}`);
+    return false;
+  }
+  replaceKnownKeywords(await res.json());
+  return true;
 }
 
 function findKnownKeyword(kw) {
@@ -233,25 +210,27 @@ function findKnownKeyword(kw) {
 
 // Pills double as a legend for what's already in the field: one already
 // present in keywords-input renders .active, and clicking it again removes
-// it from the field (toggle), keeping the pill and the field in sync. A
-// keyword carrying a saved Location (see renderKeywordLocations below) gets
-// a pin marker, so it's visible before clicking that doing so will also
-// move the map. Renaming/deleting a keyword lives on the manage-view
-// instead of on the pill itself (see "Manage keywords…").
+// it from the field (toggle), keeping the pill and the field in sync.
+// Located keywords render in the Location section (they're its saved-place
+// picker), with a pin marker; plain keywords in the Keywords section.
+// Renaming/deleting a keyword and editing its Location live on the
+// manage-view instead of on the pill itself (see "Manage keywords…").
 function renderKeywordPills() {
   const current = new Set(parseKeywords($('keywords-input').value));
-  $('keyword-pills').innerHTML = knownKeywords.map((kw) => {
+  const pill = (kw) => {
     const active = current.has(kw.name) ? ' active' : '';
     const esc = escapeHtml(kw.name);
     const pin = kw.location ? '📍 ' : '';
     return `<button type="button" class="keyword-pill${active}" data-keyword="${esc}">${pin}${esc}</button>`;
-  }).join('');
+  };
+  $('located-keyword-pills').innerHTML = knownKeywords.filter((kw) => kw.location).map(pill).join('');
+  $('keyword-pills').innerHTML = knownKeywords.filter((kw) => !kw.location).map(pill).join('');
 }
 
-// Adding a keyword that carries a saved Location also snaps the map to it,
-// mirroring the favourite-select change handler -- but only on add:
-// clicking an already-active pill to remove it leaves the map untouched,
-// since removing a keyword says nothing about where the photo actually is.
+// Adding a located keyword also snaps the map to its Location and makes it
+// the file's name -- but only on add: clicking an already-active pill to
+// remove it leaves the map untouched, since removing a keyword says nothing
+// about where the photo actually is.
 function toggleKeyword(kw) {
   const current = parseKeywords($('keywords-input').value);
   const idx = current.indexOf(kw);
@@ -263,8 +242,7 @@ function toggleKeyword(kw) {
       formState.applyProgrammaticUpdate(() => setMarker(loc.lat, loc.lon));
       formState.invalidateElevation();
       $('altitude-input').value = loc.alt;
-      $('favourite-select').value = '';
-      selectedFavouriteName = '';
+      snappedLocatedKeyword = known.name;
       offsetManuallyEdited = false;
       formState.touch('location');
       maybeResolveTimezone();
@@ -280,8 +258,8 @@ function toggleKeyword(kw) {
 // Optimistic local mirror of the server's keywords.json (updated on Apply,
 // see internal/server/session.go's Apply) -- keeps a keyword typed this
 // session showing up as a pill immediately, without a round trip. A
-// keyword merged in this way never carries a Location -- only an
-// already-known keyword can have one set, via the management UI below.
+// keyword merged in this way never carries a Location -- that's only ever
+// set through POST /api/keywords/location.
 function mergeKnownKeywords(kws) {
   let changed = false;
   kws.forEach((kw) => {
@@ -290,7 +268,7 @@ function mergeKnownKeywords(kws) {
       changed = true;
     }
   });
-  if (changed) { renderKeywordPills(); renderKeywordLocations(); }
+  if (changed) renderKeywordPills();
 }
 
 // Deletes kw from the known-keywords list and strips it from every photo in
@@ -326,8 +304,8 @@ async function deleteKeyword(kw) {
     const remaining = parseKeywords($('keywords-input').value).filter((k) => k !== kw);
     $('keywords-input').value = remaining.join(', ');
   });
+  if (editingKeyword === kw) closeLocationEditor();
   renderKeywordPills();
-  renderKeywordLocations();
   renderManageKeywordsList();
 }
 
@@ -354,10 +332,11 @@ async function renameKeyword(kw) {
     alert(`Failed to rename "${kw}": ${body.error || res.statusText}`);
     return;
   }
-  knownKeywords = await res.json();
+  const renamed = await res.json();
   // If the field being edited still has the old name queued (not yet
   // Applied), carry the rename into it too, rather than leaving a now-
-  // nonexistent keyword sitting in the current photo's field.
+  // nonexistent keyword sitting in the current photo's field. Done before
+  // replaceKnownKeywords, which would otherwise merge the old name back in.
   formState.applyProgrammaticUpdate(() => {
     const current = parseKeywords($('keywords-input').value);
     const idx = current.indexOf(kw);
@@ -366,15 +345,42 @@ async function renameKeyword(kw) {
       $('keywords-input').value = current.join(', ');
     }
   });
-  renderKeywordPills();
-  renderKeywordLocations();
+  replaceKnownKeywords(renamed);
+  if (editingKeyword === kw) closeLocationEditor();
   renderManageKeywordsList();
 }
 
-$('keyword-pills').addEventListener('click', formState.guardedField((e) => {
+// Both pill groups toggle the same way; only where they render differs.
+function onPillClick(e) {
   const btn = e.target.closest('.keyword-pill');
   if (!btn) return;
   toggleKeyword(btn.dataset.keyword);
+}
+$('keyword-pills').addEventListener('click', formState.guardedField(onPillClick));
+$('located-keyword-pills').addEventListener('click', formState.guardedField(onPillClick));
+
+// "Save pin as located keyword": captures the current pin (and altitude)
+// as a keyword's Location -- creating the keyword if it's new, or
+// (re)locating an existing one.
+$('save-located-keyword-button').addEventListener('click', formState.guarded(async () => {
+  if (!marker) {
+    alert('Drop a pin on the map first.');
+    return;
+  }
+  const name = $('located-keyword-name-input').value.trim();
+  if (!name) {
+    alert('Enter a name for this located keyword.');
+    return;
+  }
+  const altVal = $('altitude-input').value;
+  if (altVal === '') {
+    alert('Altitude is still loading — wait a moment, or enter it manually, then try again.');
+    return;
+  }
+  const ll = marker.getLatLng();
+  if (await saveKeywordLocation(name, ll.lat, ll.lng, parseFloat(altVal))) {
+    $('located-keyword-name-input').value = '';
+  }
 }));
 
 // ---- Keyword management (rename/delete) ----
@@ -385,11 +391,17 @@ $('keyword-pills').addEventListener('click', formState.guardedField((e) => {
 // per-pill controls, since deleting or renaming a keyword acts on every
 // photo in the folder, not just the one on screen -- worth a deliberate
 // destination rather than a stray click on a quick-pick pill.
+function formatLocation(loc) {
+  return loc ? `📍 ${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}` : 'no location';
+}
+
 function renderManageKeywordsList() {
   $('manage-keywords-list').innerHTML = knownKeywords.map((kw) => {
     const esc = escapeHtml(kw.name);
     return `<li>` +
       `<span class="manage-keyword-name">${esc}</span>` +
+      `<span class="manage-keyword-location-status">${formatLocation(kw.location)}</span>` +
+      `<button type="button" class="manage-keyword-location" data-keyword="${esc}">Edit location</button>` +
       `<button type="button" class="manage-keyword-rename" data-keyword="${esc}">Rename</button>` +
       `<button type="button" class="manage-keyword-delete" data-keyword="${esc}">Delete</button>` +
       `</li>`;
@@ -402,6 +414,7 @@ let manageReturnView = 'start';
 
 async function openManageKeywords(returnView) {
   manageReturnView = returnView;
+  closeLocationEditor();
   await loadKeywords();
   renderManageKeywordsList();
   switchView('manage');
@@ -412,6 +425,11 @@ $('manage-keywords-tag-button').addEventListener('click', formState.guarded(() =
 $('manage-back-button').addEventListener('click', () => switchView(manageReturnView));
 
 $('manage-keywords-list').addEventListener('click', (e) => {
+  const locBtn = e.target.closest('.manage-keyword-location');
+  if (locBtn) {
+    openLocationEditor(locBtn.dataset.keyword);
+    return;
+  }
   const renameBtn = e.target.closest('.manage-keyword-rename');
   if (renameBtn) {
     renameKeyword(renameBtn.dataset.keyword);
@@ -423,57 +441,104 @@ $('manage-keywords-list').addEventListener('click', (e) => {
   }
 });
 
-// ---- Keyword location management ----
+// ---- Keyword location editor (manage-view) ----
 
-// Renders a row per known keyword in the "Manage keyword locations"
-// disclosure: its saved Location if any, and two actions -- capture the
-// map's current pin as that keyword's Location, or clear it. Kept as its
-// own section below the quick-pick pills, rather than inline controls on
-// each pill, so the pill row itself stays visually simple.
-function renderKeywordLocations() {
-  $('keyword-locations-list').innerHTML = knownKeywords.map((kw) => {
-    const esc = escapeHtml(kw.name);
-    const status = kw.location
-      ? `${kw.location.lat.toFixed(4)}, ${kw.location.lon.toFixed(4)}`
-      : 'no location';
-    return `<li>` +
-      `<span class="kw-loc-name">${esc}</span>` +
-      `<span class="kw-loc-status">${status}</span>` +
-      `<button type="button" class="kw-loc-set" data-keyword="${esc}">Set to current pin</button>` +
-      `<button type="button" class="kw-loc-clear" data-keyword="${esc}"${kw.location ? '' : ' disabled'}>Clear</button>` +
-      `</li>`;
-  }).join('');
+// One shared editor panel with its own small map, rather than one per row:
+// Leaflet needs a real container element, and only one keyword's Location
+// is ever being edited at a time. The map starts at the keyword's own
+// Location, else -- when opened from the tagging form -- that form's pin,
+// so a place just pinned there can be saved; else it starts unpinned.
+let manageMap, manageMarker;
+let editingKeyword = null;
+// Altitude for the editor's pin while it sits where it started (the
+// keyword's saved alt, or the tagging form's altitude field); null once the
+// pin is moved here, meaning Save looks it up.
+let editingAlt = null;
+
+function setManageMarker(lat, lon) {
+  if (manageMarker) {
+    manageMarker.setLatLng([lat, lon]);
+  } else {
+    manageMarker = L.marker([lat, lon], { draggable: true }).addTo(manageMap);
+    manageMarker.on('dragend', () => { editingAlt = null; });
+  }
+  manageMap.setView([lat, lon], Math.max(manageMap.getZoom(), 12));
 }
 
-// Links kw to the map's current pin via POST /api/keywords/location (see
-// internal/server/session.go's SetKeywordLocation) -- writes immediately,
-// like deleteKeyword, rather than waiting for Apply.
-async function setKeywordLocationToCurrentPin(kw) {
-  if (!marker) {
-    alert('Drop a pin on the map first.');
-    return;
+function openLocationEditor(kw) {
+  const known = findKnownKeyword(kw);
+  editingKeyword = kw;
+  $('manage-location-keyword').textContent = kw;
+  $('manage-location-status').textContent = formatLocation(known && known.location);
+  $('manage-location-clear-button').disabled = !(known && known.location);
+  $('manage-location-editor').hidden = false;
+
+  if (!manageMap) {
+    manageMap = createMap('manage-location-map');
+    manageMap.on('click', (e) => {
+      setManageMarker(e.latlng.lat, e.latlng.lng);
+      editingAlt = null;
+    });
   }
+  // The container was hidden until just now, so Leaflet's cached size is stale.
+  manageMap.invalidateSize();
+
+  if (manageMarker) {
+    manageMap.removeLayer(manageMarker);
+    manageMarker = null;
+  }
+  editingAlt = null;
   const altVal = $('altitude-input').value;
-  if (altVal === '') {
-    alert('Altitude is still loading — wait a moment, or enter it manually, then try again.');
-    return;
+  if (known && known.location) {
+    setManageMarker(known.location.lat, known.location.lon);
+    editingAlt = known.location.alt;
+  } else if (manageReturnView === 'tag' && marker) {
+    const ll = marker.getLatLng();
+    setManageMarker(ll.lat, ll.lng);
+    if (altVal !== '') editingAlt = parseFloat(altVal);
   }
-  const ll = marker.getLatLng();
-  const res = await fetch('/api/keywords/location', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keyword: kw, lat: ll.lat, lon: ll.lng, alt: parseFloat(altVal) }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    alert(`Failed to set location for "${kw}": ${body.error || res.statusText}`);
-    return;
-  }
-  knownKeywords = await res.json();
-  renderKeywordPills();
-  renderKeywordLocations();
 }
 
-async function clearKeywordLocation(kw) {
+function closeLocationEditor() {
+  editingKeyword = null;
+  $('manage-location-editor').hidden = true;
+}
+
+// Looks up the altitude for a pin moved on the manage map. Unlike the
+// tagging form, nothing here can be edited by hand meanwhile, so it's a
+// plain request rather than formState.requestElevation; a failed lookup
+// saves 0 rather than blocking the save.
+async function lookupAltitude(lat, lon) {
+  try {
+    const res = await fetch('/api/elevation', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ lat, lon }),
+    });
+    const data = await res.json();
+    return data.ok ? data.alt : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+
+$('manage-location-save-button').addEventListener('click', async () => {
+  const kw = editingKeyword;
+  if (!kw) return;
+  if (!manageMarker) {
+    alert('Click the map to place a pin first.');
+    return;
+  }
+  const ll = manageMarker.getLatLng();
+  const alt = editingAlt !== null ? editingAlt : await lookupAltitude(ll.lat, ll.lng);
+  if (await saveKeywordLocation(kw, ll.lat, ll.lng, alt)) {
+    renderManageKeywordsList();
+    closeLocationEditor();
+  }
+});
+
+$('manage-location-clear-button').addEventListener('click', async () => {
+  const kw = editingKeyword;
+  if (!kw) return;
   const res = await fetch('/api/keywords/location', {
     method: 'DELETE', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keyword: kw }),
@@ -483,22 +548,12 @@ async function clearKeywordLocation(kw) {
     alert(`Failed to clear location for "${kw}": ${body.error || res.statusText}`);
     return;
   }
-  knownKeywords = await res.json();
-  renderKeywordPills();
-  renderKeywordLocations();
-}
+  replaceKnownKeywords(await res.json());
+  renderManageKeywordsList();
+  closeLocationEditor();
+});
 
-$('keyword-locations-list').addEventListener('click', formState.guarded((e) => {
-  const setBtn = e.target.closest('.kw-loc-set');
-  if (setBtn) {
-    setKeywordLocationToCurrentPin(setBtn.dataset.keyword);
-    return;
-  }
-  const clearBtn = e.target.closest('.kw-loc-clear');
-  if (clearBtn) {
-    clearKeywordLocation(clearBtn.dataset.keyword);
-  }
-}));
+$('manage-location-cancel-button').addEventListener('click', closeLocationEditor);
 
 // ---- Field touch tracking ----
 
@@ -539,8 +594,16 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
         setMarker(prev.lat, prev.lon);
         formState.invalidateElevation();
         $('altitude-input').value = prev.alt ?? '';
-        selectedFavouriteName = prev.favouriteName || '';
-        $('favourite-select').value = selectedFavouriteName;
+        snappedLocatedKeyword = prev.locatedKeyword || '';
+        // Location and its located keyword travel together: carry the
+        // keyword across too, unless it's already in the field.
+        const kws = parseKeywords($('keywords-input').value);
+        if (snappedLocatedKeyword && !kws.includes(snappedLocatedKeyword)) {
+          kws.push(snappedLocatedKeyword);
+          $('keywords-input').value = kws.join(', ');
+          formState.touch('keywords');
+          renderKeywordPills();
+        }
       } else if (group === 'dateTime') {
         $('datetime-input').value = prev.dateTime || '';
         $('offset-input').value = prev.offset || '';
@@ -578,7 +641,7 @@ function renderCurrent(data) {
 
   formState.resetTouched();
   offsetManuallyEdited = false;
-  selectedFavouriteName = '';
+  snappedLocatedKeyword = '';
   previousData = data.previous || {};
   formState.invalidateElevation();
   $('additional-details').open = false;
@@ -594,7 +657,6 @@ function renderCurrent(data) {
       clearMarker();
     }
     $('altitude-input').value = ex.alt ?? '';
-    $('favourite-select').value = '';
     $('keywords-input').value = (ex.keywords || []).join(', ');
     $('caption-input').value = ex.caption || '';
   });
@@ -618,7 +680,7 @@ function buildApplyPayload() {
     lat, lon,
     alt: altVal === '' ? null : parseFloat(altVal),
     locationTouched: formState.isTouched('location'),
-    favouriteName: selectedFavouriteName,
+    locatedKeyword: snappedLocatedKeyword,
     keywords: parseKeywords($('keywords-input').value),
     keywordsTouched: formState.isTouched('keywords'),
     caption: $('caption-input').value,
@@ -688,7 +750,7 @@ function hasOwnEnterBehavior(el) {
 
 // The dedicated Skip/Prev keys (ArrowRight/ArrowLeft) must defer to any
 // control with its own meaning for arrow keys: cursor movement in a text
-// field, or "change the selected option" in the favourite <select>.
+// field, or "change the selected option" in a <select>.
 function ownsArrowKeys(el) {
   if (!el) return false;
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';

@@ -8,16 +8,16 @@
 //     $('altitude-input').value whenever its response arrives, with no
 //     check that the pin/photo it was looked up for is still the one on
 //     screen. A pin dropped, then replaced by a second pin (or a
-//     favourite, or a manual edit, or a photo change) before the first
+//     located keyword, or a manual edit, or a photo change) before the first
 //     lookup resolves, could have its correct value silently clobbered by
 //     the earlier, now-stale response. (As of issue #12, the cancellation
 //     token this depends on is owned by web/static/formstate.js's
 //     requestElevation()/invalidateElevation(), not a raw counter here.)
-//  2. save-favourite-button read the altitude via
-//     `parseFloat(...) || 0`, so saving a favourite before its elevation
-//     lookup had resolved (very easy to do -- drop a pin, immediately name
-//     and save it) silently baked in 0 as that favourite's permanent
-//     stored altitude, forever after.
+//  2. Saving the pin as a saved place (then a Favourite, now a located
+//     keyword) read the altitude via `parseFloat(...) || 0`, so saving
+//     before its elevation lookup had resolved (very easy to do -- drop a
+//     pin, immediately name and save it) silently baked in 0 as that
+//     place's permanent stored altitude, forever after.
 //
 // This loads and drives the real web/static/app.js (unmodified, via Node's
 // vm module against stubbed DOM/Leaflet/fetch) to prove the fix holds
@@ -27,7 +27,9 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { flushMicrotasks, click, photoResponse, startSession, loadApp } = require('./testutil');
+const {
+  flushMicrotasks, click, clickLocatedKeywordPill, startSession, startSessionWithKeywords,
+} = require('./testutil');
 
 test('a stale elevation lookup for a superseded pin does not clobber the current altitude', async () => {
   const { elements, fetchMock, created } = await startSession();
@@ -87,28 +89,28 @@ test('a stale elevation lookup arriving after the next photo has loaded is ignor
   );
 });
 
-test('saving a favourite before its elevation lookup resolves is refused, not silently saved as 0', async () => {
+test('saving the pin as a located keyword before its elevation lookup resolves is refused, not silently saved as 0', async () => {
   const { elements, fetchMock, created } = await startSession();
 
   created.maps[0]._simulateClick(1, 2);
-  elements['favourite-name-input'].value = 'Home';
-  click(elements['save-favourite-button']);
+  elements['located-keyword-name-input'].value = 'Home';
+  click(elements['save-located-keyword-button']);
   await flushMicrotasks();
 
   assert.equal(
-    fetchMock.countPending('/api/favourites'),
+    fetchMock.countPending('/api/keywords/location'),
     0,
-    'must not save a favourite while its altitude is still unresolved',
+    'must not save a located keyword while its altitude is still unresolved',
   );
 
   fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 88 });
   await flushMicrotasks();
   assert.equal(elements['altitude-input'].value, 88);
 
-  click(elements['save-favourite-button']);
+  click(elements['save-located-keyword-button']);
   await flushMicrotasks();
-  const body = fetchMock.log.find((e) => e.url.includes('/api/favourites') && e.method === 'POST').body;
-  assert.equal(body.alt, 88, 'the favourite must be saved with its real resolved altitude, not 0');
+  const body = fetchMock.log.find((e) => e.url.includes('/api/keywords/location') && e.method === 'POST').body;
+  assert.equal(body.alt, 88, 'the located keyword must be saved with its real resolved altitude, not 0');
 });
 
 test('a manual altitude edit survives a stale elevation lookup that resolves afterwards', async () => {
@@ -135,30 +137,20 @@ test('a manual altitude edit survives a stale elevation lookup that resolves aft
   assert.equal(body.alt, 75, 'the manually-typed altitude must be what gets sent to Apply');
 });
 
-test('selecting a favourite is not clobbered by a still-pending elevation lookup from an earlier pin', async () => {
-  const app = loadApp();
-  const { elements, fetchMock, created } = app;
-
-  click(elements['start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/start', { ok: true });
-  await flushMicrotasks();
-  // A favourite already exists with a real, non-zero stored altitude.
-  fetchMock.resolveMatching('/api/favourites', [{ name: 'Home', lat: 50, lon: 60, alt: 150 }]);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', []);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
-  await flushMicrotasks();
+test('picking a located keyword is not clobbered by a still-pending elevation lookup from an earlier pin', async () => {
+  // A located keyword already exists with a real, non-zero stored altitude.
+  const { elements, fetchMock, created } = await startSessionWithKeywords([
+    { name: 'Home', location: { lat: 50, lon: 60, alt: 150 } },
+  ]);
 
   // Drop a pin first, so its elevation lookup is still in flight...
   created.maps[0]._simulateClick(1, 2);
   const pinElevation = fetchMock.pending.find((e) => e.url.includes('/api/elevation') && !e.settled);
   assert.ok(pinElevation);
 
-  // ...then pick the favourite before that lookup resolves.
-  elements['favourite-select'].dispatchEvent({ type: 'change', target: { value: 'Home' } });
-  assert.equal(elements['altitude-input'].value, 150, 'the favourite\'s own altitude should be shown immediately');
+  // ...then pick the located keyword before that lookup resolves.
+  clickLocatedKeywordPill(elements, 'Home');
+  assert.equal(elements['altitude-input'].value, 150, 'the located keyword\'s own altitude should be shown immediately');
 
   // The stale pin lookup finally lands.
   pinElevation.resolve({ ok: true, json: async () => ({ ok: true, alt: 5 }) });
@@ -166,7 +158,7 @@ test('selecting a favourite is not clobbered by a still-pending elevation lookup
 
   assert.equal(
     elements['altitude-input'].value, 150,
-    'the favourite\'s altitude must not be clobbered by the earlier pin\'s stale lookup',
+    'the located keyword\'s altitude must not be clobbered by the earlier pin\'s stale lookup',
   );
 
   click(elements['apply-button']);

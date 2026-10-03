@@ -2,9 +2,9 @@
 // Applied to a photo, shared across every -dir invocation of the tool, so
 // the tagging UI can offer them back as quick-pick pills (web/static/app.js)
 // instead of making the user retype and remember them. A keyword may also
-// carry its own saved Location (independent of internal/locations'
-// favourites), letting the UI snap the map to that location when the
-// keyword is picked -- not every keyword needs one.
+// carry its own saved Location -- a located keyword -- letting the UI snap
+// the map to that location when the keyword is picked; not every keyword
+// needs one.
 package keywords
 
 import (
@@ -15,10 +15,8 @@ import (
 	"sync"
 )
 
-// Location is a keyword's own saved coordinate, set from the map's current
-// pin when the user links it (see web/static/app.js's keyword-location
-// management UI). Independent of internal/locations.Favourite -- a keyword
-// isn't required to point at a saved favourite.
+// Location is a located keyword's saved coordinate, set from a map pin in
+// the tagging form or the manage-keywords view (see web/static/app.js).
 type Location struct {
 	Lat float64 `json:"lat"`
 	Lon float64 `json:"lon"`
@@ -169,16 +167,26 @@ func (s *Store) Rename(oldName, newName string) error {
 }
 
 // SetLocation sets (loc non-nil) or clears (loc nil) kw's saved Location,
-// then persists the store to disk. Returns an error if kw isn't known --
-// the management UI only ever offers this for a keyword already in the
-// known list.
+// then persists the store to disk. Setting a Location on an unknown kw
+// creates it as a located keyword (the tagging form's "Save pin as located
+// keyword" may name a new one); clearing an unknown kw is an error. kw is
+// trimmed, and a blank kw is an error.
 func (s *Store) SetLocation(kw string, loc *Location) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	kw = strings.TrimSpace(kw)
+	if kw == "" {
+		return fmt.Errorf("keyword name is required")
+	}
 	i, ok := s.index[kw]
 	if !ok {
-		return fmt.Errorf("unknown keyword %q", kw)
+		if loc == nil {
+			return fmt.Errorf("unknown keyword %q", kw)
+		}
+		i = len(s.keywords)
+		s.index[kw] = i
+		s.keywords = append(s.keywords, Keyword{Name: kw})
 	}
 	s.keywords[i].Location = loc
 	return s.saveLocked()

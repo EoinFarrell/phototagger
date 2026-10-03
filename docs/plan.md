@@ -102,7 +102,8 @@ first not-yet-Tagged photo in that order — no progress file needed.
 - **Leaflet.js + OpenStreetMap tiles** (via CDN — this is a real locally-served page,
   not a sandboxed artifact, so CDN scripts are fine) for the map: click to drop a pin,
   drag to nudge.
-- **Favourites dropdown**: select "Home" / "Work" / "Dublin City Centre" / etc. to
+- **Favourites dropdown** _(superseded by issue #14: Favourites became **located
+  keywords**, stored in `keywords.json` -- see `CONTEXT.md`)_: select "Home" / "Work" / "Dublin City Centre" / etc. to
   snap the pin to a saved coordinate, then drag to fine-tune if needed. A "Save
   current pin as favourite" button appends `{name, lat, lon, alt}` to a flat
   `locations.json` next to the binary — no database, just a file you can eyeball/edit.
@@ -156,7 +157,8 @@ the Tagged/Non-Tagged signal — see The queue, above.
 New filename: `YYYYMMDD-HHMMSS_<location-slug>.<ext>`, e.g.
 `20240714-143022_dublin.jpg`.
 
-- **Location slug**: the favourite's name when the pin is snapped to one. For a
+- **Location slug**: the favourite's name (since issue #14, the located keyword's
+  name) when the pin is snapped to one. For a
   freehand pin, reverse-geocode via [Nominatim](https://nominatim.org/release-docs/latest/api/Reverse/)
   (free, no key, ~1 req/sec usage policy — a non-issue at one human-paced request per
   pin-drop) at city/town granularity, falling back to county if city-level data isn't

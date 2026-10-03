@@ -40,7 +40,7 @@ function createFormState() {
   // Owns the elevation-lookup cancellation token from issue #12: an
   // /api/elevation lookup takes a moment, and by the time it resolves the
   // pin/photo it was looked up for may have been superseded by a new pin, a
-  // favourite pick, a same-as-prev copy, a manual edit, or a new photo
+  // located keyword pick, a same-as-prev copy, a manual edit, or a new photo
   // rendering -- any of which must stop that lookup's result from landing.
   // Previously each of those five call sites in app.js was independently
   // responsible for bumping a shared `altitudeGeneration` counter correctly
@@ -56,7 +56,7 @@ function createFormState() {
   function isBusy() { return busy; }
   function setBusy(v) { busy = v; }
 
-  // Brackets a block of direct field writes (renderCurrent, favourite
+  // Brackets a block of direct field writes (renderCurrent, located keyword
   // selection, same-as-previous) so guardedField() below treats them as
   // programmatic rather than the user editing the field. try/finally means
   // a callback that throws still clears the flag, unlike the hand-paired
@@ -71,8 +71,7 @@ function createFormState() {
   }
 
   // Wraps a handler so it no-ops while a navigation request is in flight.
-  // For handlers that only need locking out during busy: button clicks and
-  // the favourite <select>.
+  // For handlers that only need locking out during busy: button clicks.
   function guarded(fn) {
     return (...args) => {
       if (busy) return undefined;
@@ -97,7 +96,7 @@ function createFormState() {
   function resetTouched() { touched = freshTouched(); }
 
   // Called by a caller that's setting the altitude field's meaning itself
-  // (a favourite pick, a same-as-prev copy, a manual edit, a new photo
+  // (a located keyword pick, a same-as-prev copy, a manual edit, a new photo
   // rendering) without needing a new lookup -- invalidates whatever lookup
   // is still in flight so it can't land afterwards and clobber this value.
   function invalidateElevation() {

@@ -13,7 +13,6 @@ import (
 
 	"phototagger/internal/exiftool"
 	"phototagger/internal/keywords"
-	"phototagger/internal/locations"
 	"phototagger/internal/queue"
 	"phototagger/internal/rename"
 	"phototagger/internal/scan"
@@ -117,7 +116,6 @@ type Session struct {
 	tz        TZResolver
 	geocoder  Geocoder
 	elevation Elevation
-	locations *locations.Store
 	keywords  *keywords.Store
 
 	last lastValues
@@ -137,7 +135,6 @@ func NewSession(
 	tz TZResolver,
 	geocoder Geocoder,
 	elevation Elevation,
-	locs *locations.Store,
 	kws *keywords.Store,
 ) (*Session, error) {
 	dates, err := readDatesInBatches(exif, scanResult.Photos)
@@ -176,7 +173,6 @@ func NewSession(
 		tz:         tz,
 		geocoder:   geocoder,
 		elevation:  elevation,
-		locations:  locs,
 		keywords:   kws,
 	}, nil
 }
@@ -363,10 +359,12 @@ type PreviousValues struct {
 
 // LocationFields is the location+altitude field group.
 type LocationFields struct {
-	Lat           float64
-	Lon           float64
-	Alt           *float64
-	FavouriteName string
+	Lat float64
+	Lon float64
+	Alt *float64
+	// LocatedKeyword is the located keyword the pin was snapped to, if
+	// any -- it names the renamed file (see resolveSlug).
+	LocatedKeyword string
 }
 
 // DateTimeFields is the datetime+offset field group.
@@ -462,7 +460,7 @@ type ApplyRequest struct {
 	Lon             *float64 `json:"lon"`
 	Alt             *float64 `json:"alt"`
 	LocationTouched bool     `json:"locationTouched"`
-	FavouriteName   string   `json:"favouriteName"`
+	LocatedKeyword  string   `json:"locatedKeyword"`
 
 	Keywords        []string `json:"keywords"`
 	KeywordsTouched bool     `json:"keywordsTouched"`
@@ -572,12 +570,12 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 }
 
 // resolveSlug determines the location slug for the new filename: the
-// favourite name if the pin is snapped to one, otherwise a best-effort
+// located keyword's name if the pin is snapped to one, otherwise a best-effort
 // reverse geocode of the coordinates, or "" if neither is available (see
 // the Renaming section of docs/plan.md).
 func (s *Session) resolveSlug(req ApplyRequest) string {
-	if req.FavouriteName != "" {
-		return rename.Slugify(req.FavouriteName)
+	if req.LocatedKeyword != "" {
+		return rename.Slugify(req.LocatedKeyword)
 	}
 	if req.Lat == nil || req.Lon == nil {
 		return ""
@@ -594,7 +592,7 @@ func (s *Session) resolveSlug(req ApplyRequest) string {
 // weren't touched keep whatever was recorded from an earlier Apply.
 func (s *Session) updateLastValues(req ApplyRequest) {
 	if req.LocationTouched && req.Lat != nil && req.Lon != nil {
-		s.last.location = &LocationFields{Lat: *req.Lat, Lon: *req.Lon, Alt: req.Alt, FavouriteName: req.FavouriteName}
+		s.last.location = &LocationFields{Lat: *req.Lat, Lon: *req.Lon, Alt: req.Alt, LocatedKeyword: req.LocatedKeyword}
 	}
 	if req.DateTimeTouched {
 		dt, err := parseDateTimeLocal(req.DateTime)
@@ -622,26 +620,15 @@ func (s *Session) LookupElevation(lat, lon float64) (float64, error) {
 	return s.elevation.Lookup(lat, lon)
 }
 
-// Favourites returns the saved favourite locations.
-func (s *Session) Favourites() []locations.Favourite {
-	return s.locations.All()
-}
-
-// AddFavourite saves a new favourite (or updates one with the same name).
-func (s *Session) AddFavourite(fav locations.Favourite) error {
-	return s.locations.Add(fav)
-}
-
-// Keywords returns every previously-Applied keyword and its optional saved
-// Location, for the tagging UI's quick-pick pills and keyword-location
-// management section (see web/static/app.js).
+// Keywords returns every known keyword and its optional saved Location, for
+// the tagging UI's pills and the manage-keywords view (see web/static/app.js).
 func (s *Session) Keywords() []keywords.Keyword {
 	return s.keywords.All()
 }
 
-// SetKeywordLocation sets kw's saved Location, for the tagging UI's
-// keyword-location management section -- picking that keyword later snaps
-// the map to it (see web/static/app.js).
+// SetKeywordLocation sets kw's saved Location, making it a located keyword
+// -- picking it later snaps the map to it (see web/static/app.js). An
+// unknown kw is created.
 func (s *Session) SetKeywordLocation(kw string, loc keywords.Location) error {
 	return s.keywords.SetLocation(kw, &loc)
 }

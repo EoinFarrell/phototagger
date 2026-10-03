@@ -106,17 +106,6 @@ test('Enter while focus is on a button (e.g. the just-clicked Skip button) does 
   assert.equal(fetchMock.countPending('/api/photo/apply'), 0, 'Enter on a focused button must not be hijacked into Apply');
 });
 
-test('ArrowRight/ArrowLeft while focus is in the favourite select do not hijack its own arrow-key option browsing', async () => {
-  const { elements, fetchMock, document } = await startSession();
-
-  keydown(document, 'ArrowRight', elements['favourite-select']);
-  keydown(document, 'ArrowLeft', elements['favourite-select']);
-  await flushMicrotasks();
-
-  assert.equal(fetchMock.countPending('/api/photo/skip'), 0);
-  assert.equal(fetchMock.countPending('/api/photo/prev'), 0);
-});
-
 test('shortcuts are inert on the start screen, before a session has begun', async () => {
   const { fetchMock, document } = await startSession();
   document.getElementById('tag-view').hidden = true;

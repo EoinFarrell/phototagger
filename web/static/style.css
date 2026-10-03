@@ -66,9 +66,15 @@ legend {
 
 #tag-controls button { flex: 1; }
 
+/* Icon-only (its title/aria-label names the group): Pico's default button
+   padding and full-size font made the old text labels dominate the legends. */
 .same-as-prev {
+  width: auto;
+  margin: 0;
+  padding: 0 0.45rem;
   font-weight: normal;
   font-size: 0.85em;
+  line-height: 1.6;
   cursor: pointer;
 }
 
@@ -101,14 +107,23 @@ legend {
 }
 
 .manage-keyword-name { flex: 1; font-weight: bold; }
+.manage-keyword-location-status { color: var(--pico-muted-color); font-size: 0.85em; }
+.manage-keyword-location,
 .manage-keyword-rename,
 .manage-keyword-delete { width: auto; margin: 0; }
 
+#manage-location-editor { margin-top: 1rem; }
+#manage-location-status { color: var(--pico-muted-color); font-size: 0.85em; margin-left: 0.5rem; }
+#manage-location-map { height: 320px; margin: 0.5rem 0; }
+#manage-location-actions { display: flex; gap: 0.75rem; }
+#manage-location-actions button { width: auto; margin: 0; }
+
 /* Column, not row: side-by-side made the button's long label squeeze the
    name input down to a sliver (or an empty box on narrower windows). */
-#save-favourite-row { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
+#save-located-keyword-row { display: flex; flex-direction: column; gap: 0.4rem; margin-top: 0.4rem; }
 
-#keyword-pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+#keyword-pills,
+#located-keyword-pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
 
 .keyword-pill {
   width: auto;
@@ -132,23 +147,6 @@ legend {
 }
 
 #manage-keywords-tag-button { margin-top: 0.5rem; }
-
-#keyword-locations-list {
-  list-style: none;
-  margin: 0.5rem 0 0;
-  padding: 0;
-  font-size: 0.85em;
-}
-
-#keyword-locations-list li {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.2rem 0;
-}
-
-.kw-loc-name { font-weight: bold; min-width: 8rem; }
-.kw-loc-status { flex: 1; color: var(--pico-muted-color); }
 
 /* #additional-details itself keeps no custom border/padding box -- like the
    fieldsets above, it relies on Pico's own <details>/<summary> styling now.

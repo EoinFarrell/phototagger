@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,7 +12,6 @@ import (
 	"testing"
 
 	"phototagger/internal/keywords"
-	"phototagger/internal/locations"
 	"phototagger/internal/scan"
 )
 
@@ -85,10 +85,6 @@ func TestHandleStart_BuildsQueueForRequestedGeo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	locs, err := locations.Load(filepath.Join(root, "locations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +94,7 @@ func TestHandleStart_BuildsQueueForRequestedGeo(t *testing.T) {
 	// match the missing-gps Geo filter below.
 	exif.hasGPS[filepath.Join(source, "a.jpg")] = true
 
-	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,14 +172,45 @@ func TestHandleKeywordLocation_RequiresKeyword(t *testing.T) {
 	}
 }
 
-func TestHandleKeywordLocation_SetUnknownKeywordErrors(t *testing.T) {
+// Saving the map pin as a located keyword ("Save pin as located keyword"
+// in the tagging form) may name a keyword that doesn't exist yet: POST
+// creates it, carrying that Location.
+func TestHandleKeywordLocation_SetUnknownKeywordCreatesIt(t *testing.T) {
 	mux := newTestMux(t)
 
-	body, _ := json.Marshal(map[string]any{"keyword": "never-used", "lat": 1, "lon": 2})
+	body, _ := json.Marshal(map[string]any{"keyword": "  Pachacaid ", "lat": 43.19, "lon": 6.47, "alt": 65})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/location", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var kws []keywords.Keyword
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	want := keywords.Location{Lat: 43.19, Lon: 6.47, Alt: 65}
+	if len(kws) != 1 || kws[0].Name != "Pachacaid" || kws[0].Location == nil || *kws[0].Location != want {
+		t.Errorf("keywords after set = %+v, want one Pachacaid at %+v", kws, want)
+	}
+}
+
+func TestHandleKeywordLocation_SetRejectsBlankKeyword(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]any{"keyword": "   ", "lat": 1, "lon": 2})
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/location", bytes.NewReader(body)))
 	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for an unknown keyword", rec.Code)
+		t.Errorf("status = %d, want 400 for a blank keyword", rec.Code)
+	}
+}
+
+func TestHandleKeywordLocation_ClearUnknownKeywordErrors(t *testing.T) {
+	mux := newTestMux(t)
+
+	body, _ := json.Marshal(map[string]string{"keyword": "never-used"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodDelete, "/api/keywords/location", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 clearing an unknown keyword", rec.Code)
 	}
 }
 
@@ -342,6 +369,39 @@ func TestHandleApply_EndToEnd(t *testing.T) {
 	}
 }
 
+// The located keyword the pin was snapped to names the renamed file, and
+// comes back on the next photo's "previous" location so Location's
+// same-as-previous can restore it.
+func TestHandleApply_LocatedKeywordNamesFileAndCarriesToPrevious(t *testing.T) {
+	sess, source, _ := newTestSession(t)
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	body, _ := json.Marshal(map[string]any{
+		"dateTime": "2024-07-14T14:30:22", "lat": 43.19, "lon": 6.47, "alt": 65,
+		"locationTouched": true, "locatedKeyword": "Pachacaid",
+	})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+
+	if _, err := os.Stat(filepath.Join(source, "20240714-143022_pachacaid.jpg")); err != nil {
+		t.Errorf("expected applied file named after the located keyword: %v", err)
+	}
+
+	var resp struct {
+		Previous map[string]map[string]any `json:"previous"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if got := resp.Previous["location"]["locatedKeyword"]; got != "Pachacaid" {
+		t.Errorf("previous.location.locatedKeyword = %v, want Pachacaid (previous = %v)", got, resp.Previous)
+	}
+}
+
 func TestHandleApply_BadRequestOnMissingDateTime(t *testing.T) {
 	mux := newTestMux(t)
 
@@ -351,29 +411,6 @@ func TestHandleApply_BadRequestOnMissingDateTime(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", rec.Code)
-	}
-}
-
-func TestHandleFavourites_GetAndPost(t *testing.T) {
-	mux := newTestMux(t)
-
-	body, _ := json.Marshal(map[string]any{"name": "Home", "lat": 1, "lon": 2, "alt": 3})
-	req := httptest.NewRequest(http.MethodPost, "/api/favourites", bytes.NewReader(body))
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("POST status = %d, body = %s", rec.Code, rec.Body)
-	}
-
-	rec = httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/favourites", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("GET status = %d", rec.Code)
-	}
-	var favs []map[string]any
-	json.Unmarshal(rec.Body.Bytes(), &favs)
-	if len(favs) != 1 || favs[0]["name"] != "Home" {
-		t.Errorf("favourites = %v", favs)
 	}
 }
 
@@ -460,7 +497,7 @@ func TestHandleKeywords_DeleteRequiresKeyword(t *testing.T) {
 
 func TestHandleElevation_GracefulFailure(t *testing.T) {
 	sess, _, _ := newTestSession(t)
-	sess.elevation = fakeElevation{err: errNameRequired} // any error
+	sess.elevation = fakeElevation{err: errors.New("lookup failed")}
 	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
 		t.Fatal(err)
 	}

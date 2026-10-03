@@ -43,7 +43,7 @@ func IsTagged(name string) bool {
 	return taggedPattern.MatchString(name)
 }
 
-// Slugify turns a favourite name or reverse-geocoded place name into a
+// Slugify turns a located keyword's name or reverse-geocoded place name into a
 // filename-safe, lowercase, hyphenated slug. Diacritics are stripped
 // (café -> cafe) and apostrophes are dropped rather than turned into hyphens
 // (O'Brien's -> obriens) so common place names stay readable.

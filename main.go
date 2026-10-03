@@ -22,7 +22,6 @@ import (
 	"phototagger/internal/exiftool"
 	"phototagger/internal/geocode"
 	"phototagger/internal/keywords"
-	"phototagger/internal/locations"
 	"phototagger/internal/safety"
 	"phototagger/internal/scan"
 	"phototagger/internal/server"
@@ -40,10 +39,8 @@ func main() {
 	dir := flag.String("dir", "", "source directory of photos to tag (required)")
 	addr := flag.String("addr", "localhost:8080", "address to serve the tagging UI on")
 	open := flag.Bool("open", true, "open the tagging UI in your default browser on startup")
-	locationsPath := flag.String("locations", "locations.json",
-		"path to the favourites file, shared across every -dir invocation (relative paths resolve against the current directory, so run phototagger from the same place each time, or pass an absolute path)")
 	keywordsPath := flag.String("keywords", "keywords.json",
-		"path to the previously-used-keywords file, shared across every -dir invocation (relative paths resolve against the current directory, so run phototagger from the same place each time, or pass an absolute path)")
+		"path to the known-keywords file (including located keywords' saved Locations), shared across every -dir invocation (relative paths resolve against the current directory, so run phototagger from the same place each time, or pass an absolute path)")
 	flag.Parse()
 
 	if *dir == "" {
@@ -51,12 +48,12 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(*dir, *addr, *open, *locationsPath, *keywordsPath); err != nil {
+	if err := run(*dir, *addr, *open, *keywordsPath); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(sourceDir, addr string, openBrowser bool, locationsPath, keywordsPath string) error {
+func run(sourceDir, addr string, openBrowser bool, keywordsPath string) error {
 	if err := exiftool.CheckAvailable(); err != nil {
 		return err
 	}
@@ -97,11 +94,6 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath, keywordsPath s
 		return fmt.Errorf("loading timezone data: %w", err)
 	}
 
-	locs, err := locations.Load(locationsPath)
-	if err != nil {
-		return fmt.Errorf("loading %s: %w", locationsPath, err)
-	}
-
 	kws, err := keywords.Load(keywordsPath)
 	if err != nil {
 		return fmt.Errorf("loading %s: %w", keywordsPath, err)
@@ -115,7 +107,6 @@ func run(sourceDir, addr string, openBrowser bool, locationsPath, keywordsPath s
 		tzoffset.New(tzFinder),
 		geocode.New(),
 		elevation.New(),
-		locs,
 		kws,
 	)
 	if err != nil {

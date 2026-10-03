@@ -5,7 +5,7 @@ offset, caption, keywords) on a batch of JPEG/HEIC photos, one photo at a time,
 ahead of import into Immich.
 
 See [`docs/plan.md`](docs/plan.md) for the full design, [`CONTEXT.md`](CONTEXT.md)
-for the glossary of terms (Photo, Queue, Apply, Favourite, ...), and
+for the glossary of terms (Photo, Queue, Apply, Located keyword, ...), and
 [`docs/adr/`](docs/adr/) for the reasoning behind specific decisions.
 
 ## Prerequisites
@@ -38,18 +38,19 @@ Quitting and re-running the same command later resumes where you left off --
 the queue is just whatever in the source directory doesn't yet match the
 renamed (Tagged) filename pattern.
 
-`locations.json` (favourite locations) is shared across every `-dir` you point
-the tool at, and by default lives in whatever directory you run the command
-from -- so run it from the same place each time (e.g. always `cd` into this
-repo first), or pass `-locations /absolute/path/to/locations.json` to pin it
-somewhere stable regardless of your current directory.
+`keywords.json` (known keywords, including located keywords' saved locations)
+is shared across every `-dir` you point the tool at, and by default lives in
+whatever directory you run the command from -- so run it from the same place
+each time (e.g. always `cd` into this repo first), or pass
+`-keywords /absolute/path/to/keywords.json` to pin it somewhere stable
+regardless of your current directory.
 
 ### Flags
 
 - `-dir` (required): source directory to scan and tag.
 - `-addr` (default `localhost:8080`): address to serve the UI on.
 - `-open` (default `true`): open the UI in your default browser on startup.
-- `-locations` (default `locations.json`): path to the favourites file.
+- `-keywords` (default `keywords.json`): path to the known-keywords file.
 
 ## Verifying a batch
 

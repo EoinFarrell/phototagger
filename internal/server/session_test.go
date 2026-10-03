@@ -10,7 +10,6 @@ import (
 
 	"phototagger/internal/exiftool"
 	"phototagger/internal/keywords"
-	"phototagger/internal/locations"
 	"phototagger/internal/queue"
 	"phototagger/internal/scan"
 )
@@ -163,16 +162,12 @@ func newTestSession(t *testing.T) (*Session, string, *fakeExif) {
 	tz := fakeTZ{offset: "+01:00", zone: "Europe/Dublin", ok: true}
 	geo := fakeGeocoder{name: "Dublin"}
 	elev := fakeElevation{alt: 20}
-	locs, err := locations.Load(filepath.Join(root, "locations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sess, err := NewSession(source, backup, result, exif, tz, geo, elev, locs, kws)
+	sess, err := NewSession(source, backup, result, exif, tz, geo, elev, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,15 +195,11 @@ func newTestSessionWithPhotos(t *testing.T, filenames ...string) (*Session, stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	locs, err := locations.Load(filepath.Join(root, "locations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	sess, err := NewSession(source, backup, result, newFakeExif(), fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	sess, err := NewSession(source, backup, result, newFakeExif(), fakeTZ{}, fakeGeocoder{}, fakeElevation{}, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,10 +238,6 @@ func TestSession_GeoCounts_And_Start_FiltersByGeo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	locs, err := locations.Load(filepath.Join(root, "locations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +245,7 @@ func TestSession_GeoCounts_And_Start_FiltersByGeo(t *testing.T) {
 	exif := newFakeExif()
 	exif.hasGPS[filepath.Join(source, "20240101-080000.jpg")] = true
 
-	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -341,10 +328,6 @@ func TestSession_Start_AllModeIsChronologicalInterleave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	locs, err := locations.Load(filepath.Join(root, "locations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -353,7 +336,7 @@ func TestSession_Start_AllModeIsChronologicalInterleave(t *testing.T) {
 	exif.dates[taggedPath] = time.Date(2024, 1, 3, 8, 0, 0, 0, time.UTC)
 	exif.dates[nonTaggedPath] = time.Date(2024, 1, 1, 8, 0, 0, 0, time.UTC) // earlier despite filename
 
-	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, kws)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -531,7 +514,7 @@ func TestSession_Apply_RenamesInPlaceWithinSubfolder(t *testing.T) {
 	}
 }
 
-func TestSession_Apply_SlugFromFavouriteName(t *testing.T) {
+func TestSession_Apply_SlugFromLocatedKeyword(t *testing.T) {
 	sess, source, _ := newTestSession(t)
 
 	lat, lon := 53.35, -6.26
@@ -540,7 +523,7 @@ func TestSession_Apply_SlugFromFavouriteName(t *testing.T) {
 		LocationTouched: true,
 		Lat:             &lat,
 		Lon:             &lon,
-		FavouriteName:   "Home",
+		LocatedKeyword:  "Home",
 	}
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
@@ -551,7 +534,7 @@ func TestSession_Apply_SlugFromFavouriteName(t *testing.T) {
 	}
 }
 
-func TestSession_Apply_SlugFromGeocodeWhenNoFavourite(t *testing.T) {
+func TestSession_Apply_SlugFromGeocodeWhenNoLocatedKeyword(t *testing.T) {
 	sess, source, _ := newTestSession(t)
 
 	lat, lon := 53.35, -6.26
@@ -709,7 +692,7 @@ func TestSession_Apply_PreviousValuesCascadeAcrossSkip(t *testing.T) {
 		LocationTouched: true,
 		Lat:             &lat,
 		Lon:             &lon,
-		FavouriteName:   "Home",
+		LocatedKeyword:  "Home",
 	}
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
@@ -722,7 +705,7 @@ func TestSession_Apply_PreviousValuesCascadeAcrossSkip(t *testing.T) {
 	if cur.Previous.Location == nil {
 		t.Fatal("expected Previous.Location to be set after an Apply that touched location")
 	}
-	if cur.Previous.Location.Lat != lat || cur.Previous.Location.FavouriteName != "Home" {
+	if cur.Previous.Location.Lat != lat || cur.Previous.Location.LocatedKeyword != "Home" {
 		t.Errorf("Previous.Location = %+v", cur.Previous.Location)
 	}
 }
@@ -937,18 +920,6 @@ func TestSession_RenameKeyword_LeavesStoreUnchangedOnExifError(t *testing.T) {
 	}
 }
 
-func TestSession_FavouritesRoundtrip(t *testing.T) {
-	sess, _, _ := newTestSession(t)
-
-	if err := sess.AddFavourite(locations.Favourite{Name: "Home", Lat: 1, Lon: 2, Alt: 3}); err != nil {
-		t.Fatal(err)
-	}
-	favs := sess.Favourites()
-	if len(favs) != 1 || favs[0].Name != "Home" {
-		t.Errorf("Favourites() = %+v", favs)
-	}
-}
-
 func TestSession_SetAndClearKeywordLocation(t *testing.T) {
 	sess, _, _ := newTestSession(t)
 
@@ -975,14 +946,6 @@ func TestSession_SetAndClearKeywordLocation(t *testing.T) {
 	}
 }
 
-func TestSession_SetKeywordLocation_UnknownKeywordErrors(t *testing.T) {
-	sess, _, _ := newTestSession(t)
-
-	if err := sess.SetKeywordLocation("never-used", keywords.Location{Lat: 1, Lon: 2}); err == nil {
-		t.Fatal("expected error setting location on an unknown keyword")
-	}
-}
-
 func TestNewSession_SeedsKeywordsFromExistingPhotos(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
@@ -1000,16 +963,12 @@ func TestNewSession_SeedsKeywordsFromExistingPhotos(t *testing.T) {
 	exif.keywords[filepath.Join(source, "a.jpg")] = []string{"beach", "family"}
 	exif.keywords[filepath.Join(source, "b.jpg")] = []string{"family", "sunset"}
 
-	locs, err := locations.Load(filepath.Join(root, "locations.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	kws, err := keywords.Load(filepath.Join(root, "keywords.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, locs, kws)
+	sess, err := NewSession(source, backup, result, exif, fakeTZ{}, fakeGeocoder{}, fakeElevation{}, kws)
 	if err != nil {
 		t.Fatal(err)
 	}

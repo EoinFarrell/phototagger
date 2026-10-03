@@ -239,12 +239,49 @@ func TestSetLocation_SetsAndClears(t *testing.T) {
 	}
 }
 
-func TestSetLocation_UnknownKeywordErrors(t *testing.T) {
+func TestSetLocation_UnknownKeywordCreatesIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"gaming"})
+
+	loc := &Location{Lat: 43.19, Lon: 6.47, Alt: 65}
+	if err := store.SetLocation(" Pachacaid ", loc); err != nil {
+		t.Fatalf("SetLocation: %v", err)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	got := reloaded.All()
+	if len(got) != 2 || got[0].Name != "gaming" || got[0].Location != nil {
+		t.Fatalf("got %+v, want gaming untouched then Pachacaid", got)
+	}
+	if got[1].Name != "Pachacaid" || got[1].Location == nil || *got[1].Location != *loc {
+		t.Errorf("got %+v, want Pachacaid at %+v", got[1], loc)
+	}
+	if !reloaded.Exists("Pachacaid") {
+		t.Error("Exists(\"Pachacaid\") = false after reload")
+	}
+}
+
+func TestSetLocation_ClearUnknownKeywordErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keywords.json")
 	store, _ := Load(path)
 
-	if err := store.SetLocation("never-added", &Location{}); err == nil {
-		t.Fatal("expected error setting location on an unknown keyword")
+	if err := store.SetLocation("never-added", nil); err == nil {
+		t.Fatal("expected error clearing location on an unknown keyword")
+	}
+	if len(store.All()) != 0 {
+		t.Errorf("clearing an unknown keyword created %+v", store.All())
+	}
+}
+
+func TestSetLocation_BlankKeywordErrors(t *testing.T) {
+	store, _ := Load(filepath.Join(t.TempDir(), "keywords.json"))
+
+	if err := store.SetLocation("  ", &Location{Lat: 1, Lon: 2}); err == nil {
+		t.Fatal("expected error setting location on a blank keyword")
 	}
 }
 

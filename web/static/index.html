@@ -43,43 +43,35 @@
     <form id="tag-form">
       <fieldset data-group="location">
         <legend>Location
-          <button type="button" class="same-as-prev" data-group="location">↩ same as previous</button>
+          <button type="button" class="same-as-prev" data-group="location" title="Same as previous (location)" aria-label="Same as previous (location)">↩</button>
         </legend>
-        <label>Favourite
-          <select id="favourite-select">
-            <option value="">— freehand pin —</option>
-          </select>
-        </label>
+        <div id="located-keyword-pills"></div>
         <div id="map"></div>
-        <div id="save-favourite-row">
-          <input type="text" id="favourite-name-input" placeholder="Name this location…">
-          <button type="button" id="save-favourite-button">Save current pin as favourite</button>
+        <div id="save-located-keyword-row">
+          <input type="text" id="located-keyword-name-input" placeholder="Keyword for this place…" aria-label="Located keyword name">
+          <button type="button" id="save-located-keyword-button">Save pin as located keyword</button>
         </div>
       </fieldset>
 
       <fieldset data-group="dateTime">
         <legend>Date &amp; time
-          <button type="button" class="same-as-prev" data-group="dateTime">↩ same as previous</button>
+          <button type="button" class="same-as-prev" data-group="dateTime" title="Same as previous (date &amp; time)" aria-label="Same as previous (date &amp; time)">↩</button>
         </legend>
-        <label>Date/time <input type="datetime-local" id="datetime-input" step="1"></label>
+        <input type="datetime-local" id="datetime-input" step="1" aria-label="Date &amp; time">
       </fieldset>
 
       <fieldset data-group="keywords">
         <legend>Keywords
-          <button type="button" class="same-as-prev" data-group="keywords">↩ same as previous</button>
+          <button type="button" class="same-as-prev" data-group="keywords" title="Same as previous (keywords)" aria-label="Same as previous (keywords)">↩</button>
         </legend>
         <label>Comma-separated <input type="text" id="keywords-input"></label>
         <div id="keyword-pills"></div>
         <button type="button" id="manage-keywords-tag-button">Manage keywords…</button>
-        <details id="keyword-locations-manage">
-          <summary>Manage keyword locations</summary>
-          <ul id="keyword-locations-list"></ul>
-        </details>
       </fieldset>
 
       <fieldset data-group="caption">
         <legend>Caption
-          <button type="button" class="same-as-prev" data-group="caption">↩ same as previous</button>
+          <button type="button" class="same-as-prev" data-group="caption" title="Same as previous (caption)" aria-label="Same as previous (caption)">↩</button>
         </legend>
         <label><textarea id="caption-input" rows="2"></textarea></label>
       </fieldset>
@@ -103,6 +95,16 @@
 <section id="manage-view" class="view" hidden>
   <h1>Manage keywords</h1>
   <button type="button" id="manage-back-button">← Back</button>
+  <article id="manage-location-editor" hidden>
+    <header>Location for <strong id="manage-location-keyword"></strong> <span id="manage-location-status"></span></header>
+    <p>Click the map to place the pin.</p>
+    <div id="manage-location-map"></div>
+    <div id="manage-location-actions">
+      <button type="button" id="manage-location-save-button">Save</button>
+      <button type="button" id="manage-location-clear-button">Clear</button>
+      <button type="button" id="manage-location-cancel-button">Cancel</button>
+    </div>
+  </article>
   <ul id="manage-keywords-list"></ul>
 </section>
 

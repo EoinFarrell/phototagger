@@ -9,11 +9,9 @@ import (
 	"net/http"
 
 	"phototagger/internal/keywords"
-	"phototagger/internal/locations"
 	"phototagger/internal/queue"
 )
 
-var errNameRequired = errors.New("name is required")
 var errKeywordRequired = errors.New("keyword is required")
 
 // WebFS is the embedded static frontend, set by main via SetWebFS.
@@ -44,7 +42,6 @@ func NewMux(sess *Session) http.Handler {
 	mux.HandleFunc("/api/photo/apply", handleApply(sess))
 	mux.HandleFunc("/api/photo/skip", handleSkip(sess))
 	mux.HandleFunc("/api/photo/prev", handlePrev(sess))
-	mux.HandleFunc("/api/favourites", handleFavourites(sess))
 	mux.HandleFunc("/api/keywords", handleKeywords(sess))
 	mux.HandleFunc("/api/keywords/location", handleKeywordLocation(sess))
 	mux.HandleFunc("/api/keywords/rename", handleKeywordRename(sess))
@@ -149,14 +146,14 @@ func handleStart(sess *Session) http.HandlerFunc {
 }
 
 type fieldsJSON struct {
-	DateTime      string   `json:"dateTime,omitempty"`
-	Offset        string   `json:"offset,omitempty"`
-	Lat           *float64 `json:"lat,omitempty"`
-	Lon           *float64 `json:"lon,omitempty"`
-	Alt           *float64 `json:"alt,omitempty"`
-	FavouriteName string   `json:"favouriteName,omitempty"`
-	Keywords      []string `json:"keywords,omitempty"`
-	Caption       string   `json:"caption,omitempty"`
+	DateTime       string   `json:"dateTime,omitempty"`
+	Offset         string   `json:"offset,omitempty"`
+	Lat            *float64 `json:"lat,omitempty"`
+	Lon            *float64 `json:"lon,omitempty"`
+	Alt            *float64 `json:"alt,omitempty"`
+	LocatedKeyword string   `json:"locatedKeyword,omitempty"`
+	Keywords       []string `json:"keywords,omitempty"`
+	Caption        string   `json:"caption,omitempty"`
 }
 
 func existingToJSON(e CurrentPhoto) fieldsJSON {
@@ -180,7 +177,7 @@ func previousToJSON(p PreviousValues) map[string]fieldsJSON {
 	out := map[string]fieldsJSON{}
 	if p.Location != nil {
 		lat, lon := p.Location.Lat, p.Location.Lon
-		out["location"] = fieldsJSON{Lat: &lat, Lon: &lon, Alt: p.Location.Alt, FavouriteName: p.Location.FavouriteName}
+		out["location"] = fieldsJSON{Lat: &lat, Lon: &lon, Alt: p.Location.Alt, LocatedKeyword: p.Location.LocatedKeyword}
 	}
 	if p.DateTime != nil {
 		out["dateTime"] = fieldsJSON{DateTime: p.DateTime.DateTime.Format(dateTimeLayout), Offset: p.DateTime.Offset}
@@ -285,32 +282,6 @@ func handleApply(sess *Session) http.HandlerFunc {
 	}
 }
 
-func handleFavourites(sess *Session) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			writeJSON(w, http.StatusOK, sess.Favourites())
-		case http.MethodPost:
-			var fav locations.Favourite
-			if err := json.NewDecoder(r.Body).Decode(&fav); err != nil {
-				writeError(w, http.StatusBadRequest, err)
-				return
-			}
-			if fav.Name == "" {
-				writeError(w, http.StatusBadRequest, errNameRequired)
-				return
-			}
-			if err := sess.AddFavourite(fav); err != nil {
-				writeError(w, http.StatusInternalServerError, err)
-				return
-			}
-			writeJSON(w, http.StatusOK, sess.Favourites())
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	}
-}
-
 func handleKeywords(sess *Session) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -367,9 +338,9 @@ func handleKeywordRename(sess *Session) http.HandlerFunc {
 	}
 }
 
-// handleKeywordLocation sets (POST) or clears (DELETE) a known keyword's
-// saved Location (see internal/keywords.Store.SetLocation and
-// web/static/app.js's keyword-location management section).
+// handleKeywordLocation sets (POST, creating the keyword if it's new) or
+// clears (DELETE) a keyword's saved Location (see
+// internal/keywords.Store.SetLocation).
 func handleKeywordLocation(sess *Session) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
