@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"phototagger/internal/exiftool"
 	"phototagger/internal/keywords"
 	"phototagger/internal/scan"
 )
@@ -533,5 +534,50 @@ func TestHandleTimezone(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["ok"] != true || resp["offset"] != "+01:00" {
 		t.Errorf("resp = %v", resp)
+	}
+}
+
+func TestHandleCurrent_ReportsCameraModel(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+	model := "Pixel 7"
+	exif.existing[filepath.Join(source, "a.jpg")] = exiftool.Existing{Model: &model}
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	mux := NewMux(sess)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/photo/current", nil))
+	var resp currentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Camera != "Pixel 7" {
+		t.Errorf("Camera = %q, want %q", resp.Camera, "Pixel 7")
+	}
+}
+
+// The Done screen shows how many photos were Applied and Skipped this run;
+// anything not Applied by the time the queue runs out was Skipped.
+func TestHandleCurrent_DoneReportsAppliedCount(t *testing.T) {
+	mux := newTestMux(t)
+
+	applyBody, _ := json.Marshal(map[string]any{"dateTime": "2024-01-01T08:00:00"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(applyBody)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply status = %d, body = %s", rec.Code, rec.Body)
+	}
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/skip", nil))
+
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/photo/current", nil))
+	var resp currentResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Done || resp.Total != 2 || resp.Applied != 1 {
+		t.Errorf("got {Done:%v Total:%d Applied:%d}, want {Done:true Total:2 Applied:1}", resp.Done, resp.Total, resp.Applied)
 	}
 }

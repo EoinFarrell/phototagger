@@ -199,6 +199,9 @@ type Existing struct {
 	Altitude           *float64
 	Keywords           []string
 	Caption            *string
+	// Model is the camera model, shown under the photo preview. Read-only:
+	// Fields has no counterpart, since the tool never writes it.
+	Model *string
 }
 
 // rawExisting mirrors exiftool's -j output. Keywords may come back as a
@@ -213,6 +216,9 @@ type rawExisting struct {
 	GPSAltitude        *float64        `json:"GPSAltitude"`
 	Keywords           json.RawMessage `json:"Keywords"`
 	ImageDescription   string          `json:"ImageDescription"`
+	// Model is raw because exiftool emits an all-digit value as a JSON
+	// number rather than a string.
+	Model json.RawMessage `json:"Model"`
 }
 
 // ReadExisting reads a photo's current metadata, to prefill the tagging
@@ -222,7 +228,7 @@ func (c *Client) ReadExisting(path string) (Existing, error) {
 		"-n", "-j",
 		"-DateTimeOriginal", "-OffsetTimeOriginal",
 		"-GPSLatitude", "-GPSLongitude", "-GPSAltitude",
-		"-Keywords", "-ImageDescription",
+		"-Keywords", "-ImageDescription", "-Model",
 		path,
 	)
 	if err != nil {
@@ -255,6 +261,9 @@ func (c *Client) ReadExisting(path string) (Existing, error) {
 	if raw.ImageDescription != "" {
 		e.Caption = &raw.ImageDescription
 	}
+	if model := rawText(raw.Model); model != "" {
+		e.Model = &model
+	}
 	if len(raw.Keywords) > 0 {
 		e.Keywords, err = parseKeywords(raw.Keywords)
 		if err != nil {
@@ -263,6 +272,19 @@ func (c *Client) ReadExisting(path string) (Existing, error) {
 	}
 
 	return e, nil
+}
+
+// rawText returns a scalar JSON value as text: a string's contents, or a
+// number's literal digits. Empty for an absent or null value.
+func rawText(raw json.RawMessage) string {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	return string(raw)
 }
 
 func parseKeywords(raw json.RawMessage) ([]string, error) {

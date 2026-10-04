@@ -30,12 +30,17 @@ class FakeElement {
     this.disabled = false;
     this.required = false;
     this.src = '';
+    this.open = false;
     this.dataset = {};
     this.classList = new FakeClassList();
     this._listeners = {};
   }
   get value() { return this._value; }
   set value(v) { this._value = v; }
+  // <dialog> methods, for the manage-view's location editor.
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  focus() {}
   addEventListener(evt, cb) { (this._listeners[evt] = this._listeners[evt] || []).push(cb); }
   dispatchEvent(evt) {
     (this._listeners[evt.type] || []).slice().forEach((cb) => cb(evt));
@@ -60,6 +65,8 @@ const ELEMENT_META = {
   'mode-count-all': [], 'mode-count-non-tagged': [], 'mode-count-tagged': [],
   'geo-count-all': [], 'geo-count-missing-gps': [],
   'start-button': ['BUTTON'],
+  'done-summary': [],
+  'done-back-button': ['BUTTON'],
   'manage-keywords-start-button': ['BUTTON'],
   'manage-keywords-tag-button': ['BUTTON'],
   'manage-back-button': ['BUTTON'],
@@ -71,6 +78,8 @@ const ELEMENT_META = {
   'manage-location-clear-button': ['BUTTON'],
   'manage-location-cancel-button': ['BUTTON'],
   'located-keyword-pills': [],
+  'save-located-keyword-toggle': ['BUTTON'],
+  'save-located-keyword-row': [],
   'save-located-keyword-button': ['BUTTON'],
   'located-keyword-name-input': ['INPUT', 'text'],
   'datetime-input': ['INPUT', 'datetime-local'],
@@ -80,7 +89,8 @@ const ELEMENT_META = {
   'keyword-pills': [],
   'caption-input': ['TEXTAREA'],
   'additional-details': [], 'additional-required-badge': [],
-  'tag-progress': [], 'tag-relpath': [], 'preview-img': [],
+  'tag-progress': [], 'tag-progress-bar': ['PROGRESS'], 'tag-relpath': [], 'preview-img': [],
+  'photo-facts': [],
   'skip-button': ['BUTTON'],
   'prev-button': ['BUTTON'],
   'apply-button': ['BUTTON'],
@@ -361,7 +371,8 @@ function photoResponse(index, existing) {
 
 // Drives the app through the start screen up to the first photo being
 // rendered, resolving each fetch it issues along the way in order.
-async function startSession() {
+// `firstPhoto` overrides the /api/photo/current response.
+async function startSession(firstPhoto = photoResponse(0)) {
   const app = loadApp();
   const { fetchMock } = app;
 
@@ -371,7 +382,7 @@ async function startSession() {
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords', []);
   await flushMicrotasks();
-  fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
+  fetchMock.resolveMatching('/api/photo/current', firstPhoto);
   await flushMicrotasks();
 
   return app;

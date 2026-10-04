@@ -683,6 +683,39 @@ func TestSession_Apply_AdvancesQueueAndRemaining(t *testing.T) {
 	}
 }
 
+// A second run (the Done screen's "Back to start") must see the first run's
+// renames: Mode counts, GPS presence and the queued paths all reflect the
+// Applied photo, or the second run would try to open a file that's gone.
+func TestSession_StartAgainAfterApply_SeesTheRenamedPhoto(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+	lat, lon := 53.35, -6.26
+	if _, err := sess.Apply(ApplyRequest{
+		DateTime: "2024-07-14T14:30:22", DateTimeTouched: true, Offset: "+01:00",
+		Lat: &lat, Lon: &lon, LocationTouched: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := sess.Counts(); got.Tagged != 1 || got.NonTagged != 1 {
+		t.Errorf("Counts() = %+v, want 1 Tagged, 1 Non-Tagged", got)
+	}
+	if got := sess.GeoCounts(); got.MissingGPS != 1 {
+		t.Errorf("GeoCounts().MissingGPS = %d, want 1", got.MissingGPS)
+	}
+
+	sess.Start(queue.ModeTagged, queue.GeoAll)
+	cur, err := sess.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cur.Done || cur.RelPath != "20240714-143022_dublin.jpg" {
+		t.Errorf("Current() = {Done:%v RelPath:%q}, want the renamed photo", cur.Done, cur.RelPath)
+	}
+	if _, _, err := sess.Preview(); err != nil {
+		t.Errorf("Preview() of the renamed photo: %v", err)
+	}
+}
+
 func TestSession_Apply_PreviousValuesCascadeAcrossSkip(t *testing.T) {
 	sess, _, _ := newTestSession(t)
 

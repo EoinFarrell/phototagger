@@ -299,7 +299,7 @@ func TestExtractPreview_BothFail(t *testing.T) {
 }
 
 func TestReadExisting_FullRecord(t *testing.T) {
-	json := `[{"SourceFile":"photo.jpg","DateTimeOriginal":"2024:07:14 14:30:22","OffsetTimeOriginal":"+01:00","GPSLatitude":53.3498,"GPSLongitude":-6.2603,"GPSAltitude":12.5,"Keywords":["dublin","family"],"ImageDescription":"A caption"}]`
+	json := `[{"SourceFile":"photo.jpg","DateTimeOriginal":"2024:07:14 14:30:22","OffsetTimeOriginal":"+01:00","GPSLatitude":53.3498,"GPSLongitude":-6.2603,"GPSAltitude":12.5,"Keywords":["dublin","family"],"ImageDescription":"A caption","Model":"Pixel 7"}]`
 	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
 	c := NewWithRunner(r)
 
@@ -327,6 +327,9 @@ func TestReadExisting_FullRecord(t *testing.T) {
 	}
 	if e.Caption == nil || *e.Caption != "A caption" {
 		t.Errorf("Caption = %v", e.Caption)
+	}
+	if e.Model == nil || *e.Model != "Pixel 7" {
+		t.Errorf("Model = %v", e.Model)
 	}
 }
 
@@ -365,6 +368,22 @@ func TestReadExisting_CommaJoinedKeywordStringSplits(t *testing.T) {
 	}
 }
 
+// exiftool -j emits a numeric-looking value as a bare JSON number, so a
+// camera whose Model is all digits mustn't fail the whole read.
+func TestReadExisting_NumericModel(t *testing.T) {
+	json := `[{"SourceFile":"photo.jpg","Model":5}]`
+	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
+	c := NewWithRunner(r)
+
+	e, err := c.ReadExisting("photo.jpg")
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if e.Model == nil || *e.Model != "5" {
+		t.Errorf("Model = %v, want \"5\"", e.Model)
+	}
+}
+
 func TestReadExisting_EmptyRecord(t *testing.T) {
 	json := `[{"SourceFile":"photo.jpg"}]`
 	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
@@ -374,7 +393,7 @@ func TestReadExisting_EmptyRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	if e.DateTime != nil || e.Latitude != nil || e.Longitude != nil || e.Altitude != nil || e.Caption != nil || len(e.Keywords) != 0 {
+	if e.DateTime != nil || e.Latitude != nil || e.Longitude != nil || e.Altitude != nil || e.Caption != nil || e.Model != nil || len(e.Keywords) != 0 {
 		t.Errorf("expected all-empty Existing, got %+v", e)
 	}
 }

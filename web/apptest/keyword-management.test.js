@@ -69,7 +69,7 @@ test('"Manage keywords…" from the tagging form opens the manage view, and the 
   assert.equal(elements['manage-view'].hidden, true);
 });
 
-test('each known keyword renders a Rename and a Delete button', async () => {
+test('each known keyword renders a Rename and a red Delete button', async () => {
   const { elements, fetchMock } = loadApp();
 
   click(elements['manage-keywords-start-button']);
@@ -78,8 +78,8 @@ test('each known keyword renders a Rename and a Delete button', async () => {
   await flushMicrotasks();
 
   const html = elements['manage-keywords-list'].innerHTML;
-  assert.match(html, /class="manage-keyword-rename" data-keyword="beach"/);
-  assert.match(html, /class="manage-keyword-delete" data-keyword="beach"/);
+  assert.match(html, /class="manage-keyword-rename[^"]*" data-keyword="beach"/);
+  assert.match(html, /class="manage-keyword-delete[^"]*\bdanger\b[^"]*" data-keyword="beach"/);
 });
 
 // ---- Delete ----
@@ -256,8 +256,8 @@ test('each row shows its location status and an Edit location button', async () 
   const { elements } = await openManageFromStart([CONCERT, 'beach']);
 
   const html = elements['manage-keywords-list'].innerHTML;
-  assert.match(html, /concert[\s\S]*📍 40\.7128, -74\.0060[\s\S]*class="manage-keyword-location" data-keyword="concert">Edit location</);
-  assert.match(html, /beach[\s\S]*no location[\s\S]*class="manage-keyword-location" data-keyword="beach"/);
+  assert.match(html, /concert[\s\S]*📍 40\.7128, -74\.0060[\s\S]*class="manage-keyword-location[^"]*" data-keyword="concert">Edit location</);
+  assert.match(html, /beach[\s\S]*no location[\s\S]*class="manage-keyword-location[^"]*" data-keyword="beach"/);
 });
 
 test('Edit location on a located keyword opens a map pinned at its Location, and Save keeps it', async () => {
@@ -265,7 +265,7 @@ test('Edit location on a located keyword opens a map pinned at its Location, and
 
   clickManageEditLocation(elements, 'concert');
 
-  assert.equal(elements['manage-location-editor'].hidden, false);
+  assert.equal(elements['manage-location-editor'].open, true);
   assert.equal(elements['manage-location-keyword'].textContent, 'concert');
   assert.equal(elements['manage-location-clear-button'].disabled, false);
   assert.deepEqual(manageMarker(created).getLatLng(), { lat: 40.7128, lng: -74.006 });
@@ -278,7 +278,7 @@ test('Edit location on a located keyword opens a map pinned at its Location, and
 
   fetchMock.resolveMatching('/api/keywords/location', [CONCERT]);
   await flushMicrotasks();
-  assert.equal(elements['manage-location-editor'].hidden, true);
+  assert.equal(elements['manage-location-editor'].open, false);
 });
 
 test('Edit location on a plain keyword from the start screen starts with no pin; Save needs one', async () => {
@@ -363,7 +363,7 @@ test('Clear removes the Location, and the keyword moves back to the plain pills'
   fetchMock.resolveMatching('/api/keywords/location', [{ name: 'concert', location: null }]);
   await flushMicrotasks();
 
-  assert.equal(elements['manage-location-editor'].hidden, true);
+  assert.equal(elements['manage-location-editor'].open, false);
   assert.match(elements['manage-keywords-list'].innerHTML, /concert[\s\S]*no location/);
   click(elements['manage-back-button']);
   assert.match(elements['keyword-pills'].innerHTML, /data-keyword="concert">concert</);
@@ -379,7 +379,7 @@ test('Cancel closes the editor without a request; editing another keyword switch
   assert.equal(manageMarker(created), undefined, 'the previous keyword\'s pin must not carry over');
 
   click(elements['manage-location-cancel-button']);
-  assert.equal(elements['manage-location-editor'].hidden, true);
+  assert.equal(elements['manage-location-editor'].open, false);
   assert.equal(fetchMock.countPending('/api/keywords/location'), 0);
 });
 
@@ -391,7 +391,7 @@ test('deleting or renaming the keyword being edited closes the editor, so Save c
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
   await flushMicrotasks();
-  assert.equal(elements['manage-location-editor'].hidden, true);
+  assert.equal(elements['manage-location-editor'].open, false);
 
   clickManageEditLocation(elements, 'beach');
   promptState.result = 'seaside';
@@ -399,5 +399,5 @@ test('deleting or renaming the keyword being edited closes the editor, so Save c
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords/rename', toKeywordObjs(['seaside']));
   await flushMicrotasks();
-  assert.equal(elements['manage-location-editor'].hidden, true);
+  assert.equal(elements['manage-location-editor'].open, false);
 });

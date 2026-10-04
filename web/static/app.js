@@ -29,6 +29,10 @@ function escapeHtml(s) {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+function plural(n, noun) {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
+}
+
 function switchView(name) {
   $('start-view').hidden = name !== 'start';
   $('tag-view').hidden = name !== 'tag';
@@ -42,12 +46,12 @@ async function loadState() {
   const res = await fetch('/api/state');
   const data = await res.json();
 
-  const extLine = Object.entries(data.extCounts).map(([ext, count]) => `${count} .${ext}`).join(', ') || 'none';
-  let html = `<p><strong>${data.photoCount}</strong> photo(s) found in <code>${escapeHtml(data.sourceDir)}</code> ` +
-    `across <strong>${data.subfolderCount}</strong> subfolder(s): ${extLine}.</p>`;
-  html += `<p>Backup: <code>${escapeHtml(data.backupDir)}</code></p>`;
+  const extLine = Object.entries(data.extCounts).map(([ext, count]) => `${count} ${ext.toUpperCase()}`).join(', ') || 'no photos';
+  let html = `<p id="start-counts">${plural(data.photoCount, 'photo')} · ${plural(data.subfolderCount, 'subfolder')} · ${extLine}</p>`;
+  html += `<p class="start-path"><small>Source <code>${escapeHtml(data.sourceDir)}</code></small></p>`;
+  html += `<p class="start-path"><small>Backup <code>${escapeHtml(data.backupDir)}</code></small></p>`;
   if (data.skipped && data.skipped.length) {
-    html += `<details><summary>${data.skipped.length} skipped/non-applicable file(s)</summary>` +
+    html += `<details><summary>${plural(data.skipped.length, 'skipped/non-applicable file')}</summary>` +
       `<ul id="skipped-list">${data.skipped.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul></details>`;
   }
   $('start-summary').innerHTML = html;
@@ -74,7 +78,13 @@ $('start-button').addEventListener('click', async () => {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, geo }),
   });
   switchView('tag');
-  initMap();
+  // A second run (via the Done screen's "Back to start") reuses the map:
+  // Leaflet refuses to initialise the same container twice.
+  if (map) {
+    map.invalidateSize();
+  } else {
+    initMap();
+  }
   await loadKeywords();
   const res = await fetch('/api/photo/current');
   renderCurrent(await res.json());
@@ -359,6 +369,15 @@ function onPillClick(e) {
 $('keyword-pills').addEventListener('click', formState.guardedField(onPillClick));
 $('located-keyword-pills').addEventListener('click', formState.guardedField(onPillClick));
 
+// The name row is rarely needed, so it stays collapsed behind a small
+// toggle until asked for, and collapses again after a save or on the next
+// photo.
+$('save-located-keyword-toggle').addEventListener('click', () => {
+  const row = $('save-located-keyword-row');
+  row.hidden = !row.hidden;
+  if (!row.hidden) $('located-keyword-name-input').focus();
+});
+
 // "Save pin as located keyword": captures the current pin (and altitude)
 // as a keyword's Location -- creating the keyword if it's new, or
 // (re)locating an existing one.
@@ -380,6 +399,7 @@ $('save-located-keyword-button').addEventListener('click', formState.guarded(asy
   const ll = marker.getLatLng();
   if (await saveKeywordLocation(name, ll.lat, ll.lng, parseFloat(altVal))) {
     $('located-keyword-name-input').value = '';
+    $('save-located-keyword-row').hidden = true;
   }
 }));
 
@@ -401,9 +421,9 @@ function renderManageKeywordsList() {
     return `<li>` +
       `<span class="manage-keyword-name">${esc}</span>` +
       `<span class="manage-keyword-location-status">${formatLocation(kw.location)}</span>` +
-      `<button type="button" class="manage-keyword-location" data-keyword="${esc}">Edit location</button>` +
-      `<button type="button" class="manage-keyword-rename" data-keyword="${esc}">Rename</button>` +
-      `<button type="button" class="manage-keyword-delete" data-keyword="${esc}">Delete</button>` +
+      `<button type="button" class="manage-keyword-location outline secondary small" data-keyword="${esc}">Edit location</button>` +
+      `<button type="button" class="manage-keyword-rename outline secondary small" data-keyword="${esc}">Rename</button>` +
+      `<button type="button" class="manage-keyword-delete outline danger small" data-keyword="${esc}">Delete</button>` +
       `</li>`;
   }).join('');
 }
@@ -471,7 +491,7 @@ function openLocationEditor(kw) {
   $('manage-location-keyword').textContent = kw;
   $('manage-location-status').textContent = formatLocation(known && known.location);
   $('manage-location-clear-button').disabled = !(known && known.location);
-  $('manage-location-editor').hidden = false;
+  if (!$('manage-location-editor').open) $('manage-location-editor').showModal();
 
   if (!manageMap) {
     manageMap = createMap('manage-location-map');
@@ -501,7 +521,7 @@ function openLocationEditor(kw) {
 
 function closeLocationEditor() {
   editingKeyword = null;
-  $('manage-location-editor').hidden = true;
+  if ($('manage-location-editor').open) $('manage-location-editor').close();
 }
 
 // Looks up the altitude for a pin moved on the manage map. Unlike the
@@ -554,6 +574,8 @@ $('manage-location-clear-button').addEventListener('click', async () => {
 });
 
 $('manage-location-cancel-button').addEventListener('click', closeLocationEditor);
+// Escape closes the <dialog> natively, bypassing closeLocationEditor.
+$('manage-location-editor').addEventListener('close', () => { editingKeyword = null; });
 
 // ---- Field touch tracking ----
 
@@ -631,11 +653,16 @@ function renderCurrent(data) {
   setBusy(false);
 
   if (data.done) {
+    const applied = data.applied || 0;
+    $('done-summary').textContent =
+      `Applied ${applied} · Skipped ${data.total - applied} · ${data.total} in this run`;
     switchView('done');
     return;
   }
 
   $('tag-progress').textContent = `${data.index + 1} / ${data.total}`;
+  $('tag-progress-bar').value = data.index + 1;
+  $('tag-progress-bar').max = data.total;
   $('tag-relpath').textContent = data.relPath;
   $('preview-img').src = `${data.previewUrl}?i=${data.index}&t=${Date.now()}`;
 
@@ -645,8 +672,10 @@ function renderCurrent(data) {
   previousData = data.previous || {};
   formState.invalidateElevation();
   $('additional-details').open = false;
+  $('save-located-keyword-row').hidden = true;
 
   const ex = data.existing || {};
+  $('photo-facts').textContent = photoFacts(ex, data.camera);
   formState.applyProgrammaticUpdate(() => {
     $('datetime-input').value = ex.dateTime || '';
     $('offset-input').value = ex.offset || '';
@@ -666,6 +695,16 @@ function renderCurrent(data) {
   document.querySelectorAll('.same-as-prev').forEach((btn) => {
     btn.disabled = !previousData[btn.dataset.group];
   });
+}
+
+// What the photo carried before this run touched it, shown under the
+// preview -- the original date and camera help place a photo, and GPS
+// status says whether the map pin is real or still to be set.
+function photoFacts(ex, camera) {
+  const facts = [ex.dateTime ? `Taken ${ex.dateTime.replace('T', ' ')}` : 'No EXIF date'];
+  if (camera) facts.push(camera);
+  facts.push(ex.lat != null && ex.lon != null ? 'Has GPS' : 'No GPS');
+  return facts.join(' · ');
 }
 
 function buildApplyPayload() {
@@ -729,6 +768,11 @@ function doApply() {
   }));
 }
 
+$('done-back-button').addEventListener('click', () => {
+  switchView('start');
+  loadState();
+});
+
 $('skip-button').addEventListener('click', doSkip);
 $('prev-button').addEventListener('click', doPrev);
 $('apply-button').addEventListener('click', doApply);
@@ -744,8 +788,10 @@ function isFreeTextField(el) {
   return el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type === 'text');
 }
 
+// Links count too: Leaflet's zoom +/- are <a role="button">, and Enter on
+// a focused one should zoom, not Apply.
 function hasOwnEnterBehavior(el) {
-  return isFreeTextField(el) || !!(el && el.tagName === 'BUTTON');
+  return isFreeTextField(el) || !!(el && (el.tagName === 'BUTTON' || el.tagName === 'A'));
 }
 
 // The dedicated Skip/Prev keys (ArrowRight/ArrowLeft) must defer to any

@@ -192,9 +192,12 @@ func previousToJSON(p PreviousValues) map[string]fieldsJSON {
 }
 
 type currentResponse struct {
-	Done       bool                  `json:"done"`
-	Index      int                   `json:"index"`
-	Total      int                   `json:"total"`
+	Done  bool `json:"done"`
+	Index int  `json:"index"`
+	Total int  `json:"total"`
+	// Applied is how many photos this run Applied, reported only once Done.
+	Applied    int                   `json:"applied"`
+	Camera     string                `json:"camera,omitempty"`
 	RelPath    string                `json:"relPath,omitempty"`
 	Ext        string                `json:"ext,omitempty"`
 	IsHeic     bool                  `json:"isHeic,omitempty"`
@@ -211,8 +214,12 @@ func handleCurrent(sess *Session) http.HandlerFunc {
 			return
 		}
 		if cur.Done {
-			writeJSON(w, http.StatusOK, currentResponse{Done: true, Total: cur.Total})
+			writeJSON(w, http.StatusOK, currentResponse{Done: true, Total: cur.Total, Applied: cur.Applied})
 			return
+		}
+		var camera string
+		if cur.Existing.Model != nil {
+			camera = *cur.Existing.Model
 		}
 		writeJSON(w, http.StatusOK, currentResponse{
 			Index:      cur.Index,
@@ -220,6 +227,7 @@ func handleCurrent(sess *Session) http.HandlerFunc {
 			RelPath:    cur.RelPath,
 			Ext:        cur.Ext,
 			IsHeic:     cur.IsHeic,
+			Camera:     camera,
 			Existing:   existingToJSON(cur),
 			Previous:   previousToJSON(cur.Previous),
 			PreviewURL: "/api/photo/preview",

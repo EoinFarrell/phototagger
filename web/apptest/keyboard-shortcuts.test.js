@@ -13,7 +13,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { flushMicrotasks, keydown, photoResponse, startSession } = require('./testutil');
+const { flushMicrotasks, keydown, photoResponse, startSession, FakeElement } = require('./testutil');
 
 test('Enter with focus outside a free-text field triggers Apply', async () => {
   const { elements, fetchMock, document } = await startSession();
@@ -104,6 +104,15 @@ test('Enter while focus is on a button (e.g. the just-clicked Skip button) does 
   await flushMicrotasks();
 
   assert.equal(fetchMock.countPending('/api/photo/apply'), 0, 'Enter on a focused button must not be hijacked into Apply');
+});
+
+test('Enter on a focused link (e.g. a Leaflet zoom +/-, an <a role="button">) does not fire Apply', async () => {
+  const { fetchMock, document } = await startSession();
+
+  keydown(document, 'Enter', new FakeElement('zoom-in', 'A'));
+  await flushMicrotasks();
+
+  assert.equal(fetchMock.countPending('/api/photo/apply'), 0);
 });
 
 test('shortcuts are inert on the start screen, before a session has begun', async () => {

@@ -325,9 +325,15 @@ func (s *Session) Total() int {
 func (s *Session) Remaining() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return len(s.applied) - s.appliedCount()
+}
+
+// appliedCount returns how many of the queue's photos have been Applied.
+// Callers hold s.mu.
+func (s *Session) appliedCount() int {
 	n := 0
 	for _, a := range s.applied {
-		if !a {
+		if a {
 			n++
 		}
 	}
@@ -335,9 +341,11 @@ func (s *Session) Remaining() int {
 }
 
 // CurrentPhoto describes the photo currently shown in the UI, or reports
-// Done if every photo has been Applied.
+// Done once the queue runs out -- every photo Applied or Skipped.
 type CurrentPhoto struct {
-	Done     bool
+	Done bool
+	// Applied counts the queue's Applied photos; set only when Done.
+	Applied  int
 	Index    int
 	Total    int
 	RelPath  string
@@ -378,8 +386,9 @@ func (s *Session) Current() (CurrentPhoto, error) {
 	s.mu.Lock()
 	current, total := s.current, len(s.entries)
 	if current >= total {
+		applied := s.appliedCount()
 		s.mu.Unlock()
-		return CurrentPhoto{Done: true, Total: total}, nil
+		return CurrentPhoto{Done: true, Total: total, Applied: applied}, nil
 	}
 	photo := s.entries[current].Photo
 	previous := PreviousValues{Location: s.last.location, DateTime: s.last.dateTime, Keywords: s.last.keywords, Caption: s.last.caption}
@@ -559,14 +568,38 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	}
 
 	s.mu.Lock()
-	s.entries[s.current].Photo.Path = destPath
-	s.entries[s.current].Photo.RelPath = filepath.Join(filepath.Dir(photo.RelPath), name)
+	entry := &s.entries[s.current]
+	entry.Photo.Path = destPath
+	entry.Photo.RelPath = filepath.Join(filepath.Dir(photo.RelPath), name)
+	entry.Tagged = rename.IsTagged(name)
+	if req.DateTimeTouched {
+		entry.DateTimeOriginal = &dt
+	}
+	if req.LocationTouched {
+		entry.HasGPS = req.Lat != nil && req.Lon != nil
+	}
+	s.syncAllEntries(photo.Path, *entry)
 	s.applied[s.current] = true
 	s.updateLastValues(req)
 	s.current++
 	s.mu.Unlock()
 
 	return ApplyResult{NewPath: destPath}, nil
+}
+
+// syncAllEntries carries an Applied photo's new state from this run's
+// queue back into allEntries, which a later Start (the Done screen's "Back
+// to start") filters afresh -- without it, the next run would count the
+// photo by its old classification and queue its pre-rename path. Callers
+// hold s.mu.
+func (s *Session) syncAllEntries(oldPath string, updated queue.Entry) {
+	for i := range s.allEntries {
+		if s.allEntries[i].Photo.Path == oldPath {
+			s.allEntries[i] = updated
+			s.allEntries = queue.Order(s.allEntries)
+			return
+		}
+	}
 }
 
 // resolveSlug determines the location slug for the new filename: the
