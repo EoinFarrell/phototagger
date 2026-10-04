@@ -154,6 +154,31 @@ func TestSplitKeywordString(t *testing.T) {
 	}
 }
 
+// ReadKeywordItemsBatch reports Keywords as ExifTool's own list items --
+// what -Keywords-= matches against -- so a comma-joined string stays one
+// item rather than being split the way ReadKeywordsBatch splits it.
+func TestReadKeywordItemsBatch_KeepsACommaJoinedStringWhole(t *testing.T) {
+	json := `[
+		{"SourceFile":"a.jpg","Keywords":["beach","family"]},
+		{"SourceFile":"b.jpg","Keywords":"2019, beach, bike"},
+		{"SourceFile":"c.jpg"}
+	]`
+	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
+	c := NewWithRunner(r)
+
+	items, err := c.ReadKeywordItemsBatch([]string{"a.jpg", "b.jpg", "c.jpg"})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	want := map[string][]string{
+		"a.jpg": {"beach", "family"},
+		"b.jpg": {"2019, beach, bike"},
+	}
+	if !reflect.DeepEqual(items, want) {
+		t.Errorf("items = %v, want %v", items, want)
+	}
+}
+
 func TestReadKeywordsBatch_Empty(t *testing.T) {
 	r := &fakeRunner{}
 	c := NewWithRunner(r)

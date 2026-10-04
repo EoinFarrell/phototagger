@@ -98,6 +98,18 @@ func (c *Client) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time
 // (see internal/keywords). The returned map contains an entry only for
 // paths that have the tag; a missing entry means it wasn't present.
 func (c *Client) ReadKeywordsBatch(paths []string) (map[string][]string, error) {
+	return c.readKeywordsBatch(paths, parseKeywords)
+}
+
+// ReadKeywordItemsBatch is ReadKeywordsBatch without the comma-splitting:
+// each photo's Keywords as ExifTool's own list items, which is what
+// -Keywords-= matches against. A comma-joined string (see
+// splitKeywordString) stays one item.
+func (c *Client) ReadKeywordItemsBatch(paths []string) (map[string][]string, error) {
+	return c.readKeywordsBatch(paths, parseKeywordItems)
+}
+
+func (c *Client) readKeywordsBatch(paths []string, parse func(json.RawMessage) ([]string, error)) (map[string][]string, error) {
 	keywords := make(map[string][]string, len(paths))
 	if len(paths) == 0 {
 		return keywords, nil
@@ -121,7 +133,7 @@ func (c *Client) ReadKeywordsBatch(paths []string) (map[string][]string, error) 
 		if len(r.Keywords) == 0 {
 			continue
 		}
-		kws, err := parseKeywords(r.Keywords)
+		kws, err := parse(r.Keywords)
 		if err != nil {
 			return nil, fmt.Errorf("parsing Keywords %q from %s: %w", r.Keywords, r.SourceFile, err)
 		}
@@ -287,16 +299,26 @@ func rawText(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func parseKeywords(raw json.RawMessage) ([]string, error) {
+func parseKeywordItems(raw json.RawMessage) ([]string, error) {
 	var asSlice []string
 	if err := json.Unmarshal(raw, &asSlice); err == nil {
 		return asSlice, nil
 	}
 	var asString string
 	if err := json.Unmarshal(raw, &asString); err == nil {
-		return splitKeywordString(asString), nil
+		return []string{asString}, nil
 	}
 	return nil, fmt.Errorf("unexpected Keywords shape: %s", raw)
+}
+
+// parseKeywords is parseKeywordItems with a single string value split on
+// commas (see splitKeywordString).
+func parseKeywords(raw json.RawMessage) ([]string, error) {
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		return splitKeywordString(asString), nil
+	}
+	return parseKeywordItems(raw)
 }
 
 // splitKeywordString splits a single Keywords value on commas, trimming
@@ -423,14 +445,14 @@ func (c *Client) RemoveKeywordBatch(paths []string, kw string) error {
 	return nil
 }
 
-// RenameKeywordBatch replaces oldKw with newKw across every photo in paths,
-// in a single pass per batch: a photo without oldKw is left untouched by
-// the removal half and gains newKw from the addition half, same as applying
-// -Keywords-=X to a photo that never had X -- both no-op safely, so paths
-// can be every photo in a directory. If a photo already independently
-// carries newKw, it ends up with a duplicate entry (ExifTool's += doesn't
-// dedupe) -- accepted as a rare, self-correcting edge case rather than
-// adding dedup logic for it.
+// RenameKeywordBatch replaces oldKw with newKw on every photo in paths, in
+// a single pass per batch. ExifTool applies the -= and += halves
+// independently, so every path given gains newKw whether or not it carried
+// oldKw: callers must pass only photos that carry oldKw (issue #19 -- a
+// directory-wide pass once tagged every photo with the new name). If a
+// photo already independently carries newKw, it ends up with a duplicate
+// entry (ExifTool's += doesn't dedupe) -- accepted as a rare edge case
+// rather than adding dedup logic for it.
 func (c *Client) RenameKeywordBatch(paths []string, oldKw, newKw string) error {
 	for start := 0; start < len(paths); start += removeKeywordBatchSize {
 		end := start + removeKeywordBatchSize

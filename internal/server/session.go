@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,7 @@ type ExifClient interface {
 	RemoveKeywordBatch(paths []string, kw string) error
 	RenameKeywordBatch(paths []string, oldKw, newKw string) error
 	ReadKeywordsBatch(paths []string) (map[string][]string, error)
+	ReadKeywordItemsBatch(paths []string) (map[string][]string, error)
 	ReadGPSPresenceBatch(paths []string) (map[string]bool, error)
 }
 
@@ -704,9 +706,9 @@ func (s *Session) DeleteKeyword(kw string) error {
 // same reason DeleteKeyword is, above -- an already-Applied photo's path in
 // allEntries/entries may be stale), and the known-keywords list itself,
 // preserving its position and any saved Location. The newKw-collision and
-// blank-name checks happen before the directory-wide rewrite below, not
-// just inside keywords.Store.Rename afterwards, so a rejected rename never
-// touches a single file on disk.
+// blank-name checks happen before any file is rewritten, not just inside
+// keywords.Store.Rename afterwards, so a rejected rename never touches a
+// single file on disk.
 func (s *Session) RenameKeyword(oldKw, newKw string) error {
 	newKw = strings.TrimSpace(newKw)
 	if newKw == oldKw {
@@ -723,13 +725,44 @@ func (s *Session) RenameKeyword(oldKw, newKw string) error {
 	if err != nil {
 		return fmt.Errorf("rescanning %s: %w", s.SourceDir, err)
 	}
-	paths := make([]string, len(result.Photos))
-	for i, p := range result.Photos {
-		paths[i] = p.Path
-	}
-
-	if err := s.exif.RenameKeywordBatch(paths, oldKw, newKw); err != nil {
+	paths, err := photosCarrying(s.exif, result.Photos, oldKw)
+	if err != nil {
 		return err
 	}
+
+	if len(paths) > 0 {
+		if err := s.exif.RenameKeywordBatch(paths, oldKw, newKw); err != nil {
+			return err
+		}
+	}
 	return s.keywords.Rename(oldKw, newKw)
+}
+
+// photosCarrying returns the paths of the photos whose Keywords list has
+// kw as an item, read in batches like the startup reads. RenameKeyword
+// must pass only these to RenameKeywordBatch, which adds the new name to
+// every file it's given (issue #19). Items are matched the way
+// -Keywords-= matches them -- exactly, and without splitting a
+// comma-joined string -- so a photo whose old keyword is buried in such a
+// string is left alone rather than gaining the new name while keeping the
+// old.
+func photosCarrying(exif ExifClient, photos []scan.Photo, kw string) ([]string, error) {
+	var paths []string
+	for start := 0; start < len(photos); start += metadataReadBatchSize {
+		end := min(start+metadataReadBatchSize, len(photos))
+		batch := make([]string, 0, end-start)
+		for _, p := range photos[start:end] {
+			batch = append(batch, p.Path)
+		}
+		keywords, err := exif.ReadKeywordItemsBatch(batch)
+		if err != nil {
+			return nil, fmt.Errorf("reading keywords for photos %d-%d: %w", start, end, err)
+		}
+		for _, path := range batch {
+			if slices.Contains(keywords[path], kw) {
+				paths = append(paths, path)
+			}
+		}
+	}
+	return paths, nil
 }

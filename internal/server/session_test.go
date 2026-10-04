@@ -71,6 +71,13 @@ func (f *fakeExif) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Ti
 	}
 	return out, nil
 }
+
+// ReadKeywordItemsBatch reads the same fixture as ReadKeywordsBatch: no
+// fixture here stores a comma-joined Keywords string.
+func (f *fakeExif) ReadKeywordItemsBatch(paths []string) (map[string][]string, error) {
+	return f.ReadKeywordsBatch(paths)
+}
+
 func (f *fakeExif) ReadKeywordsBatch(paths []string) (map[string][]string, error) {
 	out := make(map[string][]string, len(paths))
 	for _, p := range paths {
@@ -825,6 +832,8 @@ func TestSession_RenameKeyword_UpdatesStoreAndUsesPostRenamePaths(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	giveEveryPhotoKeyword(t, exif, source, "beach")
+
 	if err := sess.RenameKeyword("beach", "seaside"); err != nil {
 		t.Fatal(err)
 	}
@@ -857,6 +866,62 @@ func TestSession_RenameKeyword_UpdatesStoreAndUsesPostRenamePaths(t *testing.T) 
 	}
 	if !reflect.DeepEqual(call.paths, want) {
 		t.Errorf("RenameKeywordBatch paths = %+v, want current on-disk scan %+v", call.paths, want)
+	}
+}
+
+// giveEveryPhotoKeyword makes the fake report kw on every photo currently
+// in source, by its post-Apply path -- the fake's WriteFields doesn't track
+// keywords, and Apply renames files after writing them.
+func giveEveryPhotoKeyword(t *testing.T, exif *fakeExif, source, kw string) {
+	t.Helper()
+	result, err := scan.Scan(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range result.Photos {
+		exif.keywords[p.Path] = append(exif.keywords[p.Path], kw)
+	}
+}
+
+// exiftool's "-Keywords-=old -Keywords+=new" adds new to every file it's
+// given, carrying old or not (issue #19), so only photos that carry old may
+// be passed to it.
+func TestSession_RenameKeyword_OnlyRewritesPhotosCarryingTheOldKeyword(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+	withBeach := filepath.Join(source, "a.jpg")
+	exif.keywords[withBeach] = []string{"family", "beach"}
+	exif.keywords[filepath.Join(source, "sub", "b.jpg")] = []string{"family"}
+	if err := sess.keywords.Add([]string{"beach"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("beach", "seaside"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(exif.renamedKeywordCalls) != 1 {
+		t.Fatalf("expected one RenameKeywordBatch call, got %d", len(exif.renamedKeywordCalls))
+	}
+	if got := exif.renamedKeywordCalls[0].paths; !reflect.DeepEqual(got, []string{withBeach}) {
+		t.Errorf("RenameKeywordBatch paths = %v, want only %v", got, []string{withBeach})
+	}
+}
+
+func TestSession_RenameKeyword_NoPhotoCarriesIt_RenamesOnlyTheKnownKeyword(t *testing.T) {
+	sess, _, exif := newTestSession(t)
+	if err := sess.keywords.Add([]string{"beach"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sess.RenameKeyword("beach", "seaside"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(exif.renamedKeywordCalls) != 0 {
+		t.Errorf("RenameKeywordBatch called with %v, want no call", exif.renamedKeywordCalls[0].paths)
+	}
+	if got := sess.Keywords(); len(got) != 1 || got[0].Name != "seaside" {
+		t.Errorf("Keywords() = %+v, want [seaside]", got)
 	}
 }
 
@@ -936,11 +1001,12 @@ func TestSession_RenameKeyword_RejectsCollisionBeforeTouchingFiles(t *testing.T)
 // happens before the local keywords.json update, so a failed rewrite must
 // not have already renamed the keyword in the known list.
 func TestSession_RenameKeyword_LeavesStoreUnchangedOnExifError(t *testing.T) {
-	sess, _, exif := newTestSession(t)
+	sess, source, exif := newTestSession(t)
 	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach"}, KeywordsTouched: true}
 	if _, err := sess.Apply(req); err != nil {
 		t.Fatal(err)
 	}
+	giveEveryPhotoKeyword(t, exif, source, "beach")
 	exif.renameErr = fmt.Errorf("exiftool exploded")
 
 	if err := sess.RenameKeyword("beach", "seaside"); err == nil {
