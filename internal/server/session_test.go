@@ -991,6 +991,22 @@ func TestSession_RenameKeyword_NoPhotoCarriesIt_RenamesOnlyTheKnownKeyword(t *te
 	}
 }
 
+func TestSession_KeywordUsage_CountsPhotosCarryingEachKeyword(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+	exif.keywords[filepath.Join(source, "a.jpg")] = []string{"family", "beach", "beach"}
+	exif.keywords[filepath.Join(source, "sub", "b.jpg")] = []string{"family"}
+
+	got, err := sess.KeywordUsage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A keyword listed twice on one photo still counts that photo once.
+	want := map[string]int{"family": 2, "beach": 1}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("KeywordUsage() = %v, want %v", got, want)
+	}
+}
+
 func TestSession_RenameKeyword_PreservesLocation(t *testing.T) {
 	sess, _, _ := newTestSession(t)
 

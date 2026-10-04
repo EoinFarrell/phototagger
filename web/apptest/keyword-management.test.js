@@ -276,6 +276,10 @@ test('renaming from the manage view asks for the new name in the dialog, then ca
   elements['ask-input'].value = '  seaside ';
   click(elements['ask-confirm-button']);
   await flushMicrotasks();
+  // The counts haven't arrived, so the confirmation can't say how many.
+  assert.match(elements['ask-message'].textContent, /This will edit every photo that has it\. Continue\?/);
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
 
   const req = fetchMock.log.find((e) => e.method === 'POST' && e.url.includes('/api/keywords/rename'));
   assert.ok(req, 'expected a POST /api/keywords/rename request');
@@ -297,12 +301,14 @@ test('renaming from the manage view asks for the new name in the dialog, then ca
 });
 
 test('Enter in the rename field confirms', async () => {
-  const { elements, fetchMock } = await openManageFromStart(['beach']);
+  const { elements, fetchMock } = await openManageFromStart(['beach'], { beach: 1 });
 
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
   elements['ask-input'].value = 'seaside';
   elements['ask-input'].dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
   await flushMicrotasks();
 
   assert.equal(fetchMock.countPending('/api/keywords/rename'), 1);
@@ -322,7 +328,7 @@ test("the delete dialog's confirm button is red; the rename dialog's is not", as
 });
 
 test('while a rename runs, the dialog shows a spinner and a renaming message; both clear when it fails', async () => {
-  const { elements, fetchMock } = await openManageFromStart(['beach']);
+  const { elements, fetchMock } = await openManageFromStart(['beach'], { beach: 0 });
 
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
@@ -379,11 +385,13 @@ test('an unchanged name closes the dialog without a request', async () => {
 });
 
 test('a failed rename shows the error in the dialog and leaves the row in place', async () => {
-  const { elements, fetchMock } = await openManageFromStart(['beach', 'family']);
+  const { elements, fetchMock } = await openManageFromStart(['beach', 'family'], { beach: 3, family: 1 });
 
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
   elements['ask-input'].value = 'family';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
   click(elements['ask-confirm-button']);
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords/rename', { error: 'keyword "family" already exists' }, { ok: false });
@@ -411,16 +419,112 @@ test('a new dialog starts without the previous one\'s error', async () => {
   assert.equal(elements['ask-error'].hidden, true);
 });
 
+// ---- Photo counts ----
+
+test('each row shows how many photos carry the keyword once the counts arrive', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach', 'family']);
+  assert.match(elements['manage-keywords-list'].innerHTML, /<span class="manage-keyword-count">counting…<\/span>/);
+
+  fetchMock.resolveMatching('/api/keyword-usage', { beach: 12, family: 1 });
+  await flushMicrotasks();
+
+  const html = elements['manage-keywords-list'].innerHTML;
+  assert.match(html, /beach<\/span><span class="manage-keyword-count">12 photos<\/span>/);
+  assert.match(html, /family<\/span><span class="manage-keyword-count">1 photo<\/span>/);
+});
+
+test('a keyword no photo carries shows 0 photos; a failed count shows nothing', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach'], {});
+  assert.match(elements['manage-keywords-list'].innerHTML, /0 photos/);
+
+  click(elements['manage-back-button']);
+  click(elements['manage-keywords-start-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
+  fetchMock.resolveMatching('/api/keyword-usage', { error: 'boom' }, { ok: false });
+  await flushMicrotasks();
+  assert.match(elements['manage-keywords-list'].innerHTML, /<span class="manage-keyword-count"><\/span>/);
+});
+
+test('renaming a keyword on photos asks "This will edit N photos" before sending, and Cancel there sends nothing', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach'], { beach: 12 });
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.equal(elements['ask-title'].textContent, 'Rename "beach" to "seaside"?');
+  assert.equal(elements['ask-message'].textContent, 'This will edit 12 photos. Continue?');
+  assert.equal(elements['ask-input'].hidden, true);
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
+
+  click(elements['ask-cancel-button']);
+  await flushMicrotasks();
+  assert.equal(elements['ask-dialog'].open, false);
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
+});
+
+test('confirming the photo count renames, and the count follows the new name', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach'], { beach: 12 });
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords/rename', toKeywordObjs(['seaside']));
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, false);
+  assert.match(elements['manage-keywords-list'].innerHTML, /seaside<\/span><span class="manage-keyword-count">12 photos<\/span>/);
+});
+
+test('renaming a keyword no photo carries skips the photo-count confirmation', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach'], { family: 3 });
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 1);
+});
+
+test('the delete confirmation says how many photos it will edit', async () => {
+  const { elements } = await openManageFromStart(['beach', 'family'], { beach: 12 });
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  assert.match(elements['ask-message'].textContent, /removes it from 12 photos in this folder/);
+  click(elements['ask-cancel-button']);
+
+  clickManageDelete(elements, 'family');
+  await flushMicrotasks();
+  assert.match(elements['ask-message'].textContent, /No photos in this folder have it/);
+});
+
 // ---- Edit location ----
 
 const CONCERT = { name: 'concert', location: { lat: 40.7128, lon: -74.006, alt: 10 } };
 
-async function openManageFromStart(keywords) {
+// usage, if given, resolves GET /api/keyword-usage ({name: photo count});
+// left out, the counts stay loading.
+async function openManageFromStart(keywords, usage) {
   const app = loadApp();
   click(app.elements['manage-keywords-start-button']);
   await flushMicrotasks();
   app.fetchMock.resolveMatching('/api/keywords', toKeywordObjs(keywords));
   await flushMicrotasks();
+  if (usage) {
+    app.fetchMock.resolveMatching('/api/keyword-usage', usage);
+    await flushMicrotasks();
+  }
   return app;
 }
 
@@ -566,7 +670,7 @@ test('Cancel closes the editor without a request; editing another keyword switch
 });
 
 test('deleting or renaming the keyword being edited closes the editor, so Save can\'t recreate the old name', async () => {
-  const { elements, fetchMock } = await openManageFromStart([CONCERT, 'beach']);
+  const { elements, fetchMock } = await openManageFromStart([CONCERT, 'beach'], {});
 
   clickManageEditLocation(elements, 'concert');
   clickManageDelete(elements, 'concert');

@@ -5,6 +5,7 @@ package server
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -725,13 +726,50 @@ func (s *Session) RenameKeyword(oldKw, newKw string) error {
 	return s.keywords.Rename(oldKw, newKw)
 }
 
+// KeywordUsage reports, per keyword, how many photos currently in the
+// source directory carry it -- for the manage-keywords view's per-row
+// counts and the "this will edit N photos" confirmations. Re-scans for the
+// same reason DeleteKeyword does (allEntries' paths go stale after Apply).
+func (s *Session) KeywordUsage() (map[string]int, error) {
+	result, err := scan.Scan(s.SourceDir)
+	if err != nil {
+		return nil, fmt.Errorf("rescanning %s: %w", s.SourceDir, err)
+	}
+	byPath, err := keywordsByPath(s.exif, result.Photos)
+	if err != nil {
+		return nil, err
+	}
+	usage := map[string]int{}
+	for _, p := range result.Photos {
+		for _, kw := range slices.Compact(slices.Sorted(slices.Values(byPath[p.Path]))) {
+			usage[kw]++
+		}
+	}
+	return usage, nil
+}
+
 // photosCarrying returns the paths of the photos whose Keywords list has
-// kw as an item, read in batches like the startup reads. RenameKeyword
-// must pass only these to RenameKeywordBatch, which adds the new name to
-// every file it's given (issue #19). Items are matched exactly, the way
-// -Keywords-= matches them.
+// kw as an item. RenameKeyword must pass only these to RenameKeywordBatch,
+// which adds the new name to every file it's given (issue #19). Items are
+// matched exactly, the way -Keywords-= matches them.
 func photosCarrying(exif ExifClient, photos []scan.Photo, kw string) ([]string, error) {
+	byPath, err := keywordsByPath(exif, photos)
+	if err != nil {
+		return nil, err
+	}
 	var paths []string
+	for _, p := range photos {
+		if slices.Contains(byPath[p.Path], kw) {
+			paths = append(paths, p.Path)
+		}
+	}
+	return paths, nil
+}
+
+// keywordsByPath reads every photo's Keywords list, in batches like the
+// startup reads.
+func keywordsByPath(exif ExifClient, photos []scan.Photo) (map[string][]string, error) {
+	out := make(map[string][]string, len(photos))
 	for start := 0; start < len(photos); start += metadataReadBatchSize {
 		end := min(start+metadataReadBatchSize, len(photos))
 		batch := make([]string, 0, end-start)
@@ -742,11 +780,7 @@ func photosCarrying(exif ExifClient, photos []scan.Photo, kw string) ([]string, 
 		if err != nil {
 			return nil, fmt.Errorf("reading keywords for photos %d-%d: %w", start, end, err)
 		}
-		for _, path := range batch {
-			if slices.Contains(keywords[path], kw) {
-				paths = append(paths, path)
-			}
-		}
+		maps.Copy(out, keywords)
 	}
-	return paths, nil
+	return out, nil
 }

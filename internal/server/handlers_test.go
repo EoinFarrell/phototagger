@@ -254,6 +254,26 @@ func TestHandleKeywordRename_ChangesText(t *testing.T) {
 	}
 }
 
+func TestHandleKeywordUsage_ReturnsCountsPerKeyword(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+	exif.keywords[filepath.Join(source, "a.jpg")] = []string{"beach"}
+	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	NewMux(sess).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/keyword-usage", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+	}
+	var got map[string]int
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, map[string]int{"beach": 1}) {
+		t.Errorf("usage = %v, want map[beach:1]", got)
+	}
+}
+
 func TestHandleKeywordRename_RequiresOldKeyword(t *testing.T) {
 	mux := newTestMux(t)
 

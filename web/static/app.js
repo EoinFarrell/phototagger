@@ -611,9 +611,12 @@ function mergeKnownKeywords(kws) {
 // Called from the manage-view's "Delete" button (see "---- Keyword
 // management ----" below).
 function deleteKeyword(kw) {
+  const message = keywordUsage && !keywordUsage[kw]
+    ? 'No photos in this folder have it, so this only removes it from the keyword list.'
+    : `This removes it from ${photosCarrying(kw)} in this folder, not just this one, and can't be undone from here.`;
   return ask({
     title: `Delete "${kw}"?`,
-    message: "This removes it from every photo in this folder that has it, not just this one, and can't be undone from here.",
+    message,
     confirmLabel: 'Delete',
     danger: true,
     working: `Removing "${kw}" from every photo that has it…`,
@@ -624,6 +627,7 @@ function deleteKeyword(kw) {
         body: JSON.stringify({ keyword: kw }),
       });
       if (!res.ok) return `Couldn't delete "${kw}": ${await responseError(res)}`;
+      if (keywordUsage) delete keywordUsage[kw];
       dropKnownKeyword(kw);
       return '';
     },
@@ -652,26 +656,48 @@ function dropKnownKeyword(kw) {
 // POST /api/keywords/rename (internal/server/session.go's RenameKeyword).
 // Asks for the new name in the dialog rather than an inline editable field
 // per row. A blank name is refused inline; an unchanged one just closes.
-function renameKeyword(kw) {
-  return ask({
+// A rename that will rewrite photos then asks again, saying how many --
+// skipped only when the usage counts say no photo carries kw.
+async function renameKeyword(kw) {
+  const working = `Renaming "${kw}" in every photo that has it…`;
+  let newName = null;
+  await ask({
     title: `Rename "${kw}"`,
     input: kw,
     confirmLabel: 'Rename',
-    working: `Renaming "${kw}" in every photo that has it…`,
+    working,
     onConfirm: async (value) => {
-      const newName = value.trim();
-      if (newName === '') return 'Enter a name.';
-      if (newName === kw) return '';
-      const res = await fetch('/api/keywords/rename', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldKeyword: kw, newKeyword: newName }),
-      });
-      if (!res.ok) return `Couldn't rename "${kw}": ${await responseError(res)}`;
-      applyRenameLocally(kw, newName, await res.json());
+      const name = value.trim();
+      if (name === '') return 'Enter a name.';
+      if (name === kw) return '';
+      if (keywordUsage && !keywordUsage[kw]) return submitRename(kw, name);
+      newName = name;
       return '';
     },
   });
+  if (newName === null) return;
+  await ask({
+    title: `Rename "${kw}" to "${newName}"?`,
+    message: `This will edit ${photosCarrying(kw)}. Continue?`,
+    confirmLabel: 'Rename',
+    working,
+    onConfirm: () => submitRename(kw, newName),
+  });
+}
+
+async function submitRename(kw, newName) {
+  const res = await fetch('/api/keywords/rename', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldKeyword: kw, newKeyword: newName }),
+  });
+  if (!res.ok) return `Couldn't rename "${kw}": ${await responseError(res)}`;
+  if (keywordUsage) {
+    keywordUsage[newName] = keywordUsage[kw] || 0;
+    delete keywordUsage[kw];
+  }
+  applyRenameLocally(kw, newName, await res.json());
+  return '';
 }
 
 function applyRenameLocally(kw, newName, renamed) {
@@ -757,11 +783,48 @@ function formatLocation(loc) {
   return loc ? `📍 ${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}` : 'no location';
 }
 
+// How many photos carry each keyword ({name: count}, from GET
+// /api/keyword-usage -- Session.KeywordUsage), or null while it's loading
+// or if it failed. Fetched each time the manage view opens, since reading
+// every photo's keywords takes a moment on a real library; rename and
+// delete then adjust it locally rather than re-reading everything.
+let keywordUsage = null;
+let keywordUsageState = 'loading'; // 'loading' | 'loaded' | 'failed'
+let keywordUsageGeneration = 0;
+
+async function loadKeywordUsage() {
+  const generation = ++keywordUsageGeneration;
+  keywordUsage = null;
+  keywordUsageState = 'loading';
+  let usage = null;
+  try {
+    const res = await fetch('/api/keyword-usage');
+    if (res.ok) usage = await res.json();
+  } catch (e) {
+    // Leave usage null; the rows just go without a count.
+  }
+  if (generation !== keywordUsageGeneration) return; // a newer load superseded this one
+  keywordUsage = usage;
+  keywordUsageState = usage ? 'loaded' : 'failed';
+  renderManageKeywordsList();
+}
+
+// "12 photos", or "every photo that has it" when the counts aren't known.
+function photosCarrying(kw) {
+  return keywordUsage ? plural(keywordUsage[kw] || 0, 'photo') : 'every photo that has it';
+}
+
+function usageLabel(kw) {
+  if (keywordUsage) return plural(keywordUsage[kw] || 0, 'photo');
+  return keywordUsageState === 'loading' ? 'counting…' : '';
+}
+
 function renderManageKeywordsList() {
   $('manage-keywords-list').innerHTML = knownKeywords.map((kw) => {
     const esc = escapeHtml(kw.name);
     return `<li>` +
       `<span class="manage-keyword-name">${esc}</span>` +
+      `<span class="manage-keyword-count">${usageLabel(kw.name)}</span>` +
       `<span class="manage-keyword-location-status">${formatLocation(kw.location)}</span>` +
       `<button type="button" class="manage-keyword-location outline secondary small" data-keyword="${esc}">Edit location</button>` +
       `<button type="button" class="manage-keyword-rename outline secondary small" data-keyword="${esc}">Rename</button>` +
@@ -777,6 +840,7 @@ let manageReturnView = 'start';
 async function openManageKeywords(returnView) {
   manageReturnView = returnView;
   closeLocationEditor();
+  loadKeywordUsage(); // fills in each row's count when it arrives
   await loadKeywords();
   renderManageKeywordsList();
   switchView('manage');

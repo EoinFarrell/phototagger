@@ -47,6 +47,7 @@ func NewMux(sess *Session) http.Handler {
 	mux.HandleFunc("/api/keywords", handleKeywords(sess))
 	mux.HandleFunc("/api/keywords/location", handleKeywordLocation(sess))
 	mux.HandleFunc("/api/keywords/rename", handleKeywordRename(sess))
+	mux.HandleFunc("/api/keyword-usage", handleKeywordUsage(sess))
 	mux.HandleFunc("/api/elevation", handleElevation(sess))
 	mux.HandleFunc("/api/timezone", handleTimezone(sess))
 
@@ -350,6 +351,23 @@ func handleKeywords(sess *Session) http.HandlerFunc {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	}
+}
+
+// handleKeywordUsage returns how many photos carry each keyword (see
+// Session.KeywordUsage), as {"keyword": count}.
+func handleKeywordUsage(sess *Session) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		usage, err := sess.KeywordUsage()
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, usage)
 	}
 }
 
