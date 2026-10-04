@@ -285,7 +285,7 @@ func TestHandleKeywordRename_RequiresOldKeyword(t *testing.T) {
 	}
 }
 
-func TestHandleKeywordRename_RejectsCollision(t *testing.T) {
+func TestHandleKeywordRename_OntoExistingKeywordMerges(t *testing.T) {
 	sess, _, _ := newTestSession(t)
 	if err := SetWebFS(testWebFS, "testdata/web"); err != nil {
 		t.Fatal(err)
@@ -304,8 +304,13 @@ func TestHandleKeywordRename_RejectsCollision(t *testing.T) {
 	renameBody, _ := json.Marshal(map[string]string{"oldKeyword": "beach", "newKeyword": "family"})
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/keywords/rename", bytes.NewReader(renameBody)))
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 for a destination-name collision", rec.Code)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s; want 200 for a merge", rec.Code, rec.Body)
+	}
+	var kws []keywords.Keyword
+	json.Unmarshal(rec.Body.Bytes(), &kws)
+	if len(kws) != 1 || kws[0].Name != "family" {
+		t.Errorf("keywords after merge = %+v, want [family]", kws)
 	}
 }
 

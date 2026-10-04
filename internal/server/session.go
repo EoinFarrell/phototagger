@@ -685,10 +685,11 @@ func (s *Session) DeleteKeyword(kw string) error {
 // currently in the source directory that carries oldKw (re-scanned for the
 // same reason DeleteKeyword is, above -- an already-Applied photo's path in
 // allEntries/entries may be stale), and the known-keywords list itself,
-// preserving its position and any saved Location. The newKw-collision and
-// blank-name checks happen before any file is rewritten, not just inside
-// keywords.Store.Rename afterwards, so a rejected rename never touches a
-// single file on disk.
+// preserving its position and any saved Location. If newKw is already a
+// known keyword the two merge: photos carrying both end up with newKw once,
+// and oldKw leaves the list (see keywords.Store.Rename). The blank-name
+// check happens before any file is rewritten, so a rejected rename never
+// touches a single file on disk.
 func (s *Session) RenameKeyword(oldKw, newKw string) error {
 	newKw = strings.TrimSpace(newKw)
 	if newKw == oldKw {
@@ -697,10 +698,6 @@ func (s *Session) RenameKeyword(oldKw, newKw string) error {
 	if newKw == "" {
 		return fmt.Errorf("new keyword name is required")
 	}
-	if s.keywords.Exists(newKw) {
-		return fmt.Errorf("keyword %q already exists", newKw)
-	}
-
 	result, err := scan.Scan(s.SourceDir)
 	if err != nil {
 		return fmt.Errorf("rescanning %s: %w", s.SourceDir, err)

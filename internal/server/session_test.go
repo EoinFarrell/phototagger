@@ -1059,22 +1059,25 @@ func TestSession_RenameKeyword_RejectsBlankNewName(t *testing.T) {
 	}
 }
 
-// TestSession_RenameKeyword_RejectsCollisionBeforeTouchingFiles guards that
-// the destination-name collision check happens before the directory-wide
-// EXIF rewrite, not just inside keywords.Store.Rename afterwards -- a
-// rejected rename must never touch a single file on disk.
-func TestSession_RenameKeyword_RejectsCollisionBeforeTouchingFiles(t *testing.T) {
-	sess, _, exif := newTestSession(t)
-	req := ApplyRequest{DateTime: "2024-07-14T14:30:00", Keywords: []string{"beach", "family"}, KeywordsTouched: true}
-	if _, err := sess.Apply(req); err != nil {
+// Renaming onto an existing keyword merges the two rather than failing.
+func TestSession_RenameKeyword_OntoExistingKeywordMerges(t *testing.T) {
+	sess, source, exif := newTestSession(t)
+	withBoth := filepath.Join(source, "a.jpg")
+	exif.keywords[withBoth] = []string{"beach", "seaside"}
+	if err := sess.keywords.Add([]string{"seaside", "beach"}); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := sess.RenameKeyword("beach", "family"); err == nil {
-		t.Fatal("expected error renaming onto an existing different keyword")
+	if err := sess.RenameKeyword("seaside", "beach"); err != nil {
+		t.Fatalf("RenameKeyword: %v", err)
 	}
-	if len(exif.renamedKeywordCalls) != 0 {
-		t.Errorf("a rejected rename must not touch any file, got %d RenameKeywordBatch calls", len(exif.renamedKeywordCalls))
+
+	want := []renameKeywordCall{{paths: []string{withBoth}, oldKw: "seaside", newKw: "beach"}}
+	if !reflect.DeepEqual(exif.renamedKeywordCalls, want) {
+		t.Errorf("RenameKeywordBatch calls = %+v, want %+v", exif.renamedKeywordCalls, want)
+	}
+	if got := sess.Keywords(); len(got) != 1 || got[0].Name != "beach" {
+		t.Errorf("Keywords() = %+v, want [beach]", got)
 	}
 }
 

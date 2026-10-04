@@ -385,21 +385,71 @@ test('an unchanged name closes the dialog without a request', async () => {
 });
 
 test('a failed rename shows the error in the dialog and leaves the row in place', async () => {
-  const { elements, fetchMock } = await openManageFromStart(['beach', 'family'], { beach: 3, family: 1 });
+  const { elements, fetchMock } = await openManageFromStart(['beach'], { beach: 3 });
 
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
-  elements['ask-input'].value = 'family';
+  elements['ask-input'].value = 'seaside';
   click(elements['ask-confirm-button']);
   await flushMicrotasks();
   click(elements['ask-confirm-button']);
   await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords/rename', { error: 'keyword "family" already exists' }, { ok: false });
+  fetchMock.resolveMatching('/api/keywords/rename', { error: 'exiftool failed' }, { ok: false });
   await flushMicrotasks();
 
   assert.equal(elements['ask-dialog'].open, true);
-  assert.match(elements['ask-error'].textContent, /already exists/);
+  assert.match(elements['ask-error'].textContent, /exiftool failed/);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
+});
+
+test('renaming onto an existing keyword asks to merge, then shows one keyword with a fresh count', async () => {
+  const { elements, fetchMock } = await startSessionWithKeywords(['seaside', 'beach'], { keywords: ['seaside', 'beach'] });
+  click(elements['manage-keywords-tag-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['seaside', 'beach']));
+  fetchMock.resolveMatching('/api/keyword-usage', { seaside: 4, beach: 10 });
+  await flushMicrotasks();
+
+  clickManageRename(elements, 'seaside');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'beach';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.equal(elements['ask-title'].textContent, 'Merge "seaside" into "beach"?');
+  assert.match(elements['ask-message'].textContent, /"beach" already exists\. This will edit 4 photos/);
+  assert.equal(elements['ask-confirm-button'].textContent, 'Merge');
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
+
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  const req = fetchMock.log.find((e) => e.url.includes('/api/keywords/rename'));
+  assert.deepEqual(req.body, { oldKeyword: 'seaside', newKeyword: 'beach' });
+  fetchMock.resolveMatching('/api/keywords/rename', toKeywordObjs(['beach']));
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, false);
+  const html = elements['manage-keywords-list'].innerHTML;
+  assert.doesNotMatch(html, /data-keyword="seaside"/);
+  assert.deepEqual(chipKeywords(elements), ['beach'], 'a photo with both keeps beach once');
+  // The merged count isn't a sum (photos with both count once), so it's re-read.
+  fetchMock.resolveMatching('/api/keyword-usage', { beach: 12 });
+  await flushMicrotasks();
+  assert.match(elements['manage-keywords-list'].innerHTML, /beach<\/span><span class="manage-keyword-count">12 photos<\/span>/);
+});
+
+test('a merge asks even when no photo carries the keyword being merged', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['seaside', 'beach'], { beach: 2 });
+
+  clickManageRename(elements, 'seaside');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'beach';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-title'].textContent, 'Merge "seaside" into "beach"?');
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
 });
 
 test('a new dialog starts without the previous one\'s error', async () => {

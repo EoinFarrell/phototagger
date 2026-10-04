@@ -609,7 +609,7 @@ func TestRenameKeywordBatch_BuildsExpectedArgs(t *testing.T) {
 	if len(r.calls) != 1 {
 		t.Fatalf("expected 1 invocation, got %d", len(r.calls))
 	}
-	want := []string{"-overwrite_original", "-Keywords-=beach", "-Keywords+=seaside", "a.jpg", "b.jpg"}
+	want := []string{"-overwrite_original", "-Keywords-=beach", "-Keywords-=seaside", "-Keywords+=seaside", "a.jpg", "b.jpg"}
 	if !reflect.DeepEqual(r.calls[0], want) {
 		t.Errorf("args = %v, want %v", r.calls[0], want)
 	}

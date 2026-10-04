@@ -112,10 +112,16 @@ func (s *Store) Remove(kw string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	i, ok := s.index[kw]
-	if !ok {
+	if _, ok := s.index[kw]; !ok {
 		return nil
 	}
+	s.removeLocked(kw)
+	return s.saveLocked()
+}
+
+// removeLocked drops known keyword kw and reindexes; s.mu must be held.
+func (s *Store) removeLocked(kw string) {
+	i := s.index[kw]
 	s.keywords = append(s.keywords[:i], s.keywords[i+1:]...)
 	delete(s.index, kw)
 	for name, idx := range s.index {
@@ -123,12 +129,9 @@ func (s *Store) Remove(kw string) error {
 			s.index[name] = idx - 1
 		}
 	}
-	return s.saveLocked()
 }
 
-// Exists reports whether name is already a known keyword -- used to check
-// a Rename's destination name for a collision before the caller does any
-// destructive work (rewriting every photo's EXIF) based on it.
+// Exists reports whether name is already a known keyword.
 func (s *Store) Exists(name string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,11 +140,11 @@ func (s *Store) Exists(name string) bool {
 }
 
 // Rename changes oldName's text to newName, preserving its position and
-// Location, then persists the store to disk. A no-op if newName equals
-// oldName (after trimming). Returns an error if oldName isn't known,
-// newName is blank, or newName already belongs to a different known
-// keyword -- the caller is expected to have already checked Exists before
-// doing any destructive work this depends on succeeding.
+// Location, then persists the store to disk. If newName is already a known
+// keyword, the two merge instead: oldName's entry goes, and newName keeps
+// its own position and Location, taking oldName's Location only if it had
+// none. A no-op if newName equals oldName (after trimming). Returns an
+// error if oldName isn't known or newName is blank.
 func (s *Store) Rename(oldName, newName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -157,8 +160,12 @@ func (s *Store) Rename(oldName, newName string) error {
 	if !ok {
 		return fmt.Errorf("unknown keyword %q", oldName)
 	}
-	if _, exists := s.index[newName]; exists {
-		return fmt.Errorf("keyword %q already exists", newName)
+	if j, exists := s.index[newName]; exists {
+		if s.keywords[j].Location == nil {
+			s.keywords[j].Location = s.keywords[i].Location
+		}
+		s.removeLocked(oldName)
+		return s.saveLocked()
 	}
 	s.keywords[i].Name = newName
 	delete(s.index, oldName)

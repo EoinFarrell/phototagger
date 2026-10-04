@@ -182,16 +182,56 @@ func TestRename_BlankNewNameErrors(t *testing.T) {
 	}
 }
 
-func TestRename_CollisionWithAnotherKeywordErrors(t *testing.T) {
+func TestRename_OntoExistingKeywordMerges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "keywords.json")
 	store, _ := Load(path)
-	store.Add([]string{"beach", "family"})
+	store.Add([]string{"seaside", "family", "beach"})
+	seasideLoc := &Location{Lat: 1, Lon: 2, Alt: 3}
+	store.SetLocation("seaside", seasideLoc)
 
-	if err := store.Rename("beach", "family"); err == nil {
-		t.Fatal("expected error renaming onto an existing different keyword")
+	if err := store.Rename("seaside", "beach"); err != nil {
+		t.Fatalf("Rename: %v", err)
 	}
-	if all := names(store.All()); len(all) != 2 || all[0] != "beach" || all[1] != "family" {
-		t.Errorf("a rejected rename must not change either keyword, got %+v", all)
+
+	all := store.All()
+	if got := names(all); len(got) != 2 || got[0] != "family" || got[1] != "beach" {
+		t.Errorf("got %+v, want [family beach]: seaside merged into beach, which keeps its place", got)
+	}
+	if all[1].Location == nil || *all[1].Location != *seasideLoc {
+		t.Errorf("beach Location = %+v, want seaside's %+v since beach had none", all[1].Location, seasideLoc)
+	}
+	if store.Exists("seaside") {
+		t.Error("seaside still known after merging into beach")
+	}
+	if err := store.Add([]string{"x"}); err != nil {
+		t.Fatal(err) // index must still be consistent after the merge
+	}
+	if got := names(store.All()); len(got) != 3 || got[2] != "x" {
+		t.Errorf("Add after merge got %+v, want [family beach x]", got)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := names(reloaded.All()); len(got) != 3 || got[1] != "beach" {
+		t.Errorf("merge did not persist, got %+v", got)
+	}
+}
+
+func TestRename_MergeKeepsTargetsOwnLocation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "keywords.json")
+	store, _ := Load(path)
+	store.Add([]string{"seaside", "beach"})
+	store.SetLocation("seaside", &Location{Lat: 1, Lon: 2})
+	beachLoc := &Location{Lat: 5, Lon: 6}
+	store.SetLocation("beach", beachLoc)
+
+	if err := store.Rename("seaside", "beach"); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+	if all := store.All(); len(all) != 1 || *all[0].Location != *beachLoc {
+		t.Errorf("got %+v, want only beach, keeping its own %+v", all, beachLoc)
 	}
 }
 

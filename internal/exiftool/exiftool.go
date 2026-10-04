@@ -410,17 +410,17 @@ func (c *Client) RemoveKeywordBatch(paths []string, kw string) error {
 // a single pass per batch. ExifTool applies the -= and += halves
 // independently, so every path given gains newKw whether or not it carried
 // oldKw: callers must pass only photos that carry oldKw (issue #19 -- a
-// directory-wide pass once tagged every photo with the new name). If a
-// photo already independently carries newKw, it ends up with a duplicate
-// entry (ExifTool's += doesn't dedupe) -- accepted as a rare edge case
-// rather than adding dedup logic for it.
+// directory-wide pass once tagged every photo with the new name). newKw is
+// removed before it's added (ExifTool's documented "-=X -+=X" idiom), so a
+// photo already carrying newKw -- a rename onto an existing keyword, i.e. a
+// merge -- ends up with it once rather than duplicated.
 func (c *Client) RenameKeywordBatch(paths []string, oldKw, newKw string) error {
 	for start := 0; start < len(paths); start += removeKeywordBatchSize {
 		end := start + removeKeywordBatchSize
 		if end > len(paths) {
 			end = len(paths)
 		}
-		args := append([]string{"-overwrite_original", "-Keywords-=" + oldKw, "-Keywords+=" + newKw}, paths[start:end]...)
+		args := append([]string{"-overwrite_original", "-Keywords-=" + oldKw, "-Keywords-=" + newKw, "-Keywords+=" + newKw}, paths[start:end]...)
 		if _, err := c.runner.Output(args...); err != nil {
 			return fmt.Errorf("renaming keyword %q to %q for photos %d-%d: %w", oldKw, newKw, start, end, err)
 		}

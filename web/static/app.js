@@ -660,7 +660,9 @@ function dropKnownKeyword(kw) {
 // Asks for the new name in the dialog rather than an inline editable field
 // per row. A blank name is refused inline; an unchanged one just closes.
 // A rename that will rewrite photos then asks again, saying how many --
-// skipped only when the usage counts say no photo carries kw.
+// skipped only when the usage counts say no photo carries kw. A name that's
+// already a known keyword merges kw into it, which always asks, since kw
+// leaves the list either way.
 async function renameKeyword(kw) {
   const working = `Renaming "${kw}" in every photo that has it…`;
   let newName = null;
@@ -673,12 +675,22 @@ async function renameKeyword(kw) {
       const name = value.trim();
       if (name === '') return 'Enter a name.';
       if (name === kw) return '';
-      if (keywordUsage && !keywordUsage[kw]) return submitRename(kw, name);
+      if (!isKnownKeyword(name) && keywordUsage && !keywordUsage[kw]) return submitRename(kw, name);
       newName = name;
       return '';
     },
   });
   if (newName === null) return;
+  if (isKnownKeyword(newName)) {
+    await ask({
+      title: `Merge "${kw}" into "${newName}"?`,
+      message: `"${newName}" already exists. This will edit ${photosCarrying(kw)}, giving each "${newName}" in place of "${kw}", and "${kw}" leaves the keyword list. Continue?`,
+      confirmLabel: 'Merge',
+      working: `Merging "${kw}" into "${newName}"…`,
+      onConfirm: () => submitRename(kw, newName),
+    });
+    return;
+  }
   await ask({
     title: `Rename "${kw}" to "${newName}"?`,
     message: `This will edit ${photosCarrying(kw)}. Continue?`,
@@ -688,18 +700,27 @@ async function renameKeyword(kw) {
   });
 }
 
+function isKnownKeyword(name) {
+  return knownKeywords.some((k) => k.name === name);
+}
+
 async function submitRename(kw, newName) {
+  const merging = isKnownKeyword(newName);
   const res = await fetch('/api/keywords/rename', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ oldKeyword: kw, newKeyword: newName }),
   });
   if (!res.ok) return `Couldn't rename "${kw}": ${await responseError(res)}`;
-  if (keywordUsage) {
+  applyRenameLocally(kw, newName, await res.json());
+  if (merging) {
+    // Photos carrying both now count once, so the sum would be wrong.
+    loadKeywordUsage();
+  } else if (keywordUsage) {
     keywordUsage[newName] = keywordUsage[kw] || 0;
     delete keywordUsage[kw];
+    renderManageKeywordsList();
   }
-  applyRenameLocally(kw, newName, await res.json());
   return '';
 }
 
@@ -709,7 +730,8 @@ function applyRenameLocally(kw, newName, renamed) {
   // keyword on it. Done before replaceKnownKeywords, which would otherwise
   // merge the old name back in.
   formState.applyProgrammaticUpdate(() => {
-    setPhotoKeywords(photoKeywords.map((k) => (k === kw ? newName : k)), { touched: false });
+    // A Set, so a merge into a keyword the photo already has leaves it once.
+    setPhotoKeywords([...new Set(photoKeywords.map((k) => (k === kw ? newName : k)))], { touched: false });
   });
   replaceKnownKeywords(renamed);
   if (editingKeyword === kw) closeLocationEditor();
