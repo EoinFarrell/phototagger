@@ -106,7 +106,7 @@ const ELEMENT_META = {
   'located-keyword-error': [],
   'manage-location-error': [],
   'ask-dialog': [], 'ask-title': [], 'ask-message': [],
-  'ask-input': ['INPUT', 'text'], 'ask-error': [],
+  'ask-input': ['INPUT', 'text'], 'ask-error': [], 'ask-working': [],
   'ask-cancel-button': ['BUTTON'], 'ask-confirm-button': ['BUTTON'],
   'skip-button': ['BUTTON'],
   'prev-button': ['BUTTON'],

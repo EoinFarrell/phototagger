@@ -8,7 +8,8 @@
 // see keywords.test.js for the tagging form's tag input. Rename
 // (RenameKeyword, via POST /api/keywords/rename) is new: it changes a
 // keyword's text everywhere. Both ask first in the shared in-page
-// dialog (#ask-dialog, issue #18), which also shows their errors. Edit
+// dialog (#ask-dialog, issue #18), which also shows their errors and,
+// while they run, a busy state (issue #21). Edit
 // location sets or clears a keyword's saved Location (making it a located
 // keyword, or a plain one again) from a small map of its own, via
 // POST/DELETE /api/keywords/location.
@@ -203,6 +204,57 @@ test('Escape is ignored while a delete is in flight, so its result is still show
   assert.match(elements['ask-error'].textContent, /boom/);
 });
 
+test('while a delete runs, the confirm button shows a spinner and the dialog says what it\'s doing; both clear on success', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].getAttribute('aria-busy'), null);
+  assert.equal(elements['ask-working'].hidden, true);
+
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].getAttribute('aria-busy'), 'true');
+  assert.equal(elements['ask-working'].hidden, false);
+  assert.match(elements['ask-working'].textContent, /Removing "beach" from every photo/);
+
+  fetchMock.resolveMatching('/api/keywords', []);
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].getAttribute('aria-busy'), null);
+  assert.equal(elements['ask-working'].hidden, true);
+});
+
+test('the busy state clears when a delete fails, leaving only the error', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', { error: 'boom' }, { ok: false });
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-confirm-button'].getAttribute('aria-busy'), null);
+  assert.equal(elements['ask-working'].hidden, true);
+  assert.equal(elements['ask-error'].hidden, false);
+});
+
+test('retrying hides the previous attempt\'s error while the new one runs', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', { error: 'boom' }, { ok: false });
+  await flushMicrotasks();
+
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  assert.equal(elements['ask-error'].hidden, true);
+  assert.equal(elements['ask-working'].hidden, false);
+});
+
 // ---- Rename ----
 
 test('renaming from the manage view asks for the new name in the dialog, then calls POST /api/keywords/rename and updates the list and the photo\'s keywords', async () => {
@@ -267,6 +319,23 @@ test("the delete dialog's confirm button is red; the rename dialog's is not", as
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
   assert.equal(elements['ask-confirm-button'].classList.contains('danger'), false);
+});
+
+test('while a rename runs, the dialog shows a spinner and a renaming message; both clear when it fails', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].getAttribute('aria-busy'), 'true');
+  assert.match(elements['ask-working'].textContent, /Renaming "beach" in every photo/);
+
+  fetchMock.resolveMatching('/api/keywords/rename', { error: 'boom' }, { ok: false });
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].getAttribute('aria-busy'), null);
+  assert.equal(elements['ask-working'].hidden, true);
 });
 
 test('cancelling the rename dialog makes no request', async () => {

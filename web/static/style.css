@@ -395,6 +395,7 @@ fieldset[data-group="keywords"] { position: relative; }
 #ask-dialog > article { width: 100%; max-width: 480px; }
 #ask-title { margin-bottom: 0.75rem; font-size: 1.15rem; }
 #ask-input { margin-bottom: 0; }
+#ask-working { margin: 0.5rem 0 0; color: var(--pico-muted-color); font-size: 0.85em; }
 
 /* ---- Done ---- */
 

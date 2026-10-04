@@ -74,18 +74,28 @@ async function responseError(res) {
 // confirmation and text prompt -- and resolves once it closes. `input`
 // (a starting value) adds a text field. `onConfirm(value)` runs the action
 // with the dialog still open and returns an error message to show inline
-// (keeping it open for another try or Cancel), or '' to close. Cancel,
+// (keeping it open for another try or Cancel), or '' to close. While it
+// runs, the confirm button shows Pico's aria-busy spinner and `working`
+// shows as a line in the dialog -- rename and delete everywhere can take a
+// while on a real library (issue #21). Cancel,
 // Escape, or closing it any other way resolve without calling onConfirm --
 // except while onConfirm is running, when both are held off so its result
 // (success or error) is never lost.
 let askPending = null;
 
-function setAskRunning(running) {
+function setAskRunning(running, working = '') {
   $('ask-confirm-button').disabled = running;
   $('ask-cancel-button').disabled = running;
+  if (running) {
+    $('ask-confirm-button').setAttribute('aria-busy', 'true');
+    showMessage('ask-working', working);
+  } else {
+    $('ask-confirm-button').removeAttribute('aria-busy');
+    clearMessage('ask-working');
+  }
 }
 
-function ask({ title, message = '', input = null, confirmLabel, danger = false, onConfirm }) {
+function ask({ title, message = '', input = null, confirmLabel, danger = false, working = 'Working…', onConfirm }) {
   if (askPending) finishAsk(); // never strand an earlier caller's promise
   $('ask-title').textContent = title;
   $('ask-message').textContent = message;
@@ -99,7 +109,7 @@ function ask({ title, message = '', input = null, confirmLabel, danger = false, 
   setAskRunning(false);
   const opener = document.activeElement;
   return new Promise((resolve) => {
-    askPending = { onConfirm, resolve, opener };
+    askPending = { onConfirm, working, resolve, opener };
     $('ask-dialog').showModal();
     if (input !== null) $('ask-input').focus();
   });
@@ -118,7 +128,8 @@ function finishAsk() {
 $('ask-confirm-button').addEventListener('click', async () => {
   const pending = askPending;
   if (!pending) return;
-  setAskRunning(true);
+  clearMessage('ask-error');
+  setAskRunning(true, pending.working);
   let error;
   try {
     error = await pending.onConfirm($('ask-input').value);
@@ -578,6 +589,7 @@ function deleteKeyword(kw) {
     message: "This removes it from every photo in this folder that has it, not just this one, and can't be undone from here.",
     confirmLabel: 'Delete',
     danger: true,
+    working: `Removing "${kw}" from every photo that has it…`,
     onConfirm: async () => {
       const res = await fetch('/api/keywords', {
         method: 'DELETE',
@@ -618,6 +630,7 @@ function renameKeyword(kw) {
     title: `Rename "${kw}"`,
     input: kw,
     confirmLabel: 'Rename',
+    working: `Renaming "${kw}" in every photo that has it…`,
     onConfirm: async (value) => {
       const newName = value.trim();
       if (newName === '') return 'Enter a name.';
