@@ -478,9 +478,12 @@ type ApplyRequest struct {
 	CaptionTouched bool   `json:"captionTouched"`
 }
 
-// ApplyResult is what Apply did to the file, for logging/tests.
+// ApplyResult is what Apply did to the file; the apply handler reports
+// RelPath back to the UI.
 type ApplyResult struct {
 	NewPath string
+	// RelPath is NewPath relative to the source directory.
+	RelPath string
 }
 
 // Apply writes the touched fields and renames the current photo in place,
@@ -570,7 +573,8 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	s.mu.Lock()
 	entry := &s.entries[s.current]
 	entry.Photo.Path = destPath
-	entry.Photo.RelPath = filepath.Join(filepath.Dir(photo.RelPath), name)
+	relPath := filepath.Join(filepath.Dir(photo.RelPath), name)
+	entry.Photo.RelPath = relPath
 	entry.Tagged = rename.IsTagged(name)
 	if req.DateTimeTouched {
 		entry.DateTimeOriginal = &dt
@@ -584,7 +588,7 @@ func (s *Session) Apply(req ApplyRequest) (ApplyResult, error) {
 	s.current++
 	s.mu.Unlock()
 
-	return ApplyResult{NewPath: destPath}, nil
+	return ApplyResult{NewPath: destPath, RelPath: relPath}, nil
 }
 
 // syncAllEntries carries an Applied photo's new state from this run's

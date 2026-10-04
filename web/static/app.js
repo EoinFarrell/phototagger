@@ -34,6 +34,9 @@ function plural(n, noun) {
 }
 
 function switchView(name) {
+  // The toast belongs to the tagging run; Done keeps it so the last Apply
+  // is still confirmed.
+  if (name !== 'tag' && name !== 'done') hideToast();
   $('start-view').hidden = name !== 'start';
   $('tag-view').hidden = name !== 'tag';
   $('manage-view').hidden = name !== 'manage';
@@ -649,8 +652,35 @@ function parseKeywords(text) {
   return text.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+// Confirms an Apply by naming the file it produced. A later Apply replaces
+// the message and restarts the timer. #toast is a live region, so it stays
+// rendered and is shown with a class rather than `hidden` -- a region
+// unhidden at the same moment its text changes often isn't announced.
+const TOAST_MS = 4000;
+let toastTimer = null;
+
+function showToast(message) {
+  $('toast').textContent = message;
+  $('toast').classList.add('visible');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, TOAST_MS);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  $('toast').classList.remove('visible');
+  $('toast').textContent = '';
+}
+
 function renderCurrent(data) {
   setBusy(false);
+  // Only the apply response carries appliedAs; Skip and Prev clear any
+  // toast left over from an earlier Apply, which would now be misleading.
+  if (data.appliedAs) {
+    showToast(`Saved as ${data.appliedAs}`);
+  } else {
+    hideToast();
+  }
 
   if (data.done) {
     const applied = data.applied || 0;

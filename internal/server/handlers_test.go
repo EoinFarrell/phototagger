@@ -581,3 +581,29 @@ func TestHandleCurrent_DoneReportsAppliedCount(t *testing.T) {
 		t.Errorf("got {Done:%v Total:%d Applied:%d}, want {Done:true Total:2 Applied:1}", resp.Done, resp.Total, resp.Applied)
 	}
 }
+
+// The apply response carries the Applied photo's new name alongside the
+// next photo, for the "Saved as …" toast.
+func TestHandleApply_ReportsAppliedAs(t *testing.T) {
+	mux := newTestMux(t)
+
+	// Applied in queue order: a.jpg, then sub/b.jpg.
+	for _, tc := range []struct{ dateTime, want string }{
+		{"2024-01-01T08:00:00", "20240101-080000.jpg"},
+		{"2024-01-02T09:00:00", filepath.Join("sub", "20240102-090000.jpg")},
+	} {
+		body, _ := json.Marshal(map[string]any{"dateTime": tc.dateTime})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/photo/apply", bytes.NewReader(body)))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body)
+		}
+		var resp currentResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		if resp.AppliedAs != tc.want {
+			t.Errorf("AppliedAs = %q, want %q", resp.AppliedAs, tc.want)
+		}
+	}
+}

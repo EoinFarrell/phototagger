@@ -91,6 +91,7 @@ const ELEMENT_META = {
   'additional-details': [], 'additional-required-badge': [],
   'tag-progress': [], 'tag-progress-bar': ['PROGRESS'], 'tag-relpath': [], 'preview-img': [],
   'photo-facts': [],
+  'toast': [],
   'skip-button': ['BUTTON'],
   'prev-button': ['BUTTON'],
   'apply-button': ['BUTTON'],

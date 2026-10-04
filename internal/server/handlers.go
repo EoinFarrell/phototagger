@@ -196,7 +196,10 @@ type currentResponse struct {
 	Index int  `json:"index"`
 	Total int  `json:"total"`
 	// Applied is how many photos this run Applied, reported only once Done.
-	Applied    int                   `json:"applied"`
+	Applied int `json:"applied"`
+	// AppliedAs is the just-Applied photo's new relative path, set only on
+	// the apply response.
+	AppliedAs  string                `json:"appliedAs,omitempty"`
 	Camera     string                `json:"camera,omitempty"`
 	RelPath    string                `json:"relPath,omitempty"`
 	Ext        string                `json:"ext,omitempty"`
@@ -208,31 +211,41 @@ type currentResponse struct {
 
 func handleCurrent(sess *Session) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cur, err := sess.Current()
+		resp, err := currentPayload(sess)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
-		if cur.Done {
-			writeJSON(w, http.StatusOK, currentResponse{Done: true, Total: cur.Total, Applied: cur.Applied})
-			return
-		}
-		var camera string
-		if cur.Existing.Model != nil {
-			camera = *cur.Existing.Model
-		}
-		writeJSON(w, http.StatusOK, currentResponse{
-			Index:      cur.Index,
-			Total:      cur.Total,
-			RelPath:    cur.RelPath,
-			Ext:        cur.Ext,
-			IsHeic:     cur.IsHeic,
-			Camera:     camera,
-			Existing:   existingToJSON(cur),
-			Previous:   previousToJSON(cur.Previous),
-			PreviewURL: "/api/photo/preview",
-		})
+		writeJSON(w, http.StatusOK, resp)
 	}
+}
+
+// currentPayload builds the current-photo response that GET
+// /api/photo/current, Skip and Prev return, and that Apply returns with
+// AppliedAs added.
+func currentPayload(sess *Session) (currentResponse, error) {
+	cur, err := sess.Current()
+	if err != nil {
+		return currentResponse{}, err
+	}
+	if cur.Done {
+		return currentResponse{Done: true, Total: cur.Total, Applied: cur.Applied}, nil
+	}
+	var camera string
+	if cur.Existing.Model != nil {
+		camera = *cur.Existing.Model
+	}
+	return currentResponse{
+		Index:      cur.Index,
+		Total:      cur.Total,
+		RelPath:    cur.RelPath,
+		Ext:        cur.Ext,
+		IsHeic:     cur.IsHeic,
+		Camera:     camera,
+		Existing:   existingToJSON(cur),
+		Previous:   previousToJSON(cur.Previous),
+		PreviewURL: "/api/photo/preview",
+	}, nil
 }
 
 func handlePreview(sess *Session) http.HandlerFunc {
@@ -281,12 +294,19 @@ func handleApply(sess *Session) http.HandlerFunc {
 			return
 		}
 
-		if _, err := sess.Apply(req); err != nil {
+		result, err := sess.Apply(req)
+		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
 
-		handleCurrent(sess)(w, r)
+		resp, err := currentPayload(sess)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		resp.AppliedAs = result.RelPath
+		writeJSON(w, http.StatusOK, resp)
 	}
 }
 
