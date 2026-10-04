@@ -246,29 +246,21 @@ func readDatesInBatches(exif ExifClient, photos []scan.Photo) (map[string]time.T
 // number of batched exiftool invocations, returning the deduplicated union
 // in first-seen order for seeding the known-keywords store at startup.
 func readKeywordsInBatches(exif ExifClient, photos []scan.Photo) ([]string, error) {
+	byPath, err := keywordsByPath(exif, photos)
+	if err != nil {
+		return nil, err
+	}
 	seen := map[string]bool{}
 	var all []string
-	for start := 0; start < len(photos); start += metadataReadBatchSize {
-		end := start + metadataReadBatchSize
-		if end > len(photos) {
-			end = len(photos)
-		}
-		paths := make([]string, end-start)
-		for i, p := range photos[start:end] {
-			paths[i] = p.Path
-		}
-		batch, err := exif.ReadKeywordsBatch(paths)
-		if err != nil {
-			return nil, fmt.Errorf("reading keywords for photos %d-%d: %w", start, end, err)
-		}
-		for _, kws := range batch {
-			for _, k := range kws {
-				if seen[k] {
-					continue
-				}
-				seen[k] = true
-				all = append(all, k)
+	// Walk photos, not byPath: a map's iteration order is random, which
+	// would seed the known-keywords list in a different order every run.
+	for _, p := range photos {
+		for _, k := range byPath[p.Path] {
+			if seen[k] {
+				continue
 			}
+			seen[k] = true
+			all = append(all, k)
 		}
 	}
 	return all, nil
