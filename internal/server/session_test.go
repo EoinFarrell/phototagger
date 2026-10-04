@@ -743,11 +743,77 @@ func TestSession_Apply_PreviousValuesCascadeAcrossSkip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cur.Previous.Location == nil {
-		t.Fatal("expected Previous.Location to be set after an Apply that touched location")
+		t.Fatal("expected Previous.Location to be set after an Apply with a pin")
 	}
 	if cur.Previous.Location.Lat != lat || cur.Previous.Location.LocatedKeyword != "Home" {
 		t.Errorf("Previous.Location = %+v", cur.Previous.Location)
 	}
+}
+
+func TestSession_Apply_PreviousValuesRecordUntouchedGroups(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+
+	// Nothing Touched: the photo already had all of this.
+	lat, lon, alt := 53.35, -6.26, 12.0
+	if _, err := sess.Apply(ApplyRequest{
+		DateTime: "2024-07-14T14:30:22", Offset: "+01:00",
+		Lat: &lat, Lon: &lon, Alt: &alt, LocatedKeyword: "Home",
+		Keywords: []string{"beach", "family"},
+		Caption:  "Sandcastles",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	prev := mustCurrent(t, sess).Previous
+	wantDT := time.Date(2024, 7, 14, 14, 30, 22, 0, time.UTC)
+	if prev.DateTime == nil || !prev.DateTime.DateTime.Equal(wantDT) || prev.DateTime.Offset != "+01:00" {
+		t.Errorf("Previous.DateTime = %+v, want %v +01:00", prev.DateTime, wantDT)
+	}
+	if prev.Location == nil || prev.Location.Lat != lat || prev.Location.Lon != lon ||
+		prev.Location.Alt == nil || *prev.Location.Alt != alt || prev.Location.LocatedKeyword != "Home" {
+		t.Errorf("Previous.Location = %+v", prev.Location)
+	}
+	if prev.Keywords == nil || !reflect.DeepEqual(*prev.Keywords, []string{"beach", "family"}) {
+		t.Errorf("Previous.Keywords = %v", prev.Keywords)
+	}
+	if prev.Caption == nil || *prev.Caption != "Sandcastles" {
+		t.Errorf("Previous.Caption = %v", prev.Caption)
+	}
+}
+
+func TestSession_Apply_PreviousValuesAreNilForGroupsThePhotoLacked(t *testing.T) {
+	sess, _, _ := newTestSession(t)
+
+	lat, lon := 53.35, -6.26
+	if _, err := sess.Apply(ApplyRequest{
+		DateTime: "2024-07-14T14:30:22", Lat: &lat, Lon: &lon, LocationTouched: true,
+		Keywords: []string{"beach"}, KeywordsTouched: true, Caption: "x", CaptionTouched: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Re-Apply the same photo with no pin, keywords or caption: the next
+	// photo copies what this one ended up with, not an older Apply's values.
+	sess.Prev()
+	if _, err := sess.Apply(ApplyRequest{DateTime: "2024-07-14T14:30:22"}); err != nil {
+		t.Fatal(err)
+	}
+
+	prev := mustCurrent(t, sess).Previous
+	if prev.Location != nil || prev.Keywords != nil || prev.Caption != nil {
+		t.Errorf("Previous = {Location:%v Keywords:%v Caption:%v}, want all nil", prev.Location, prev.Keywords, prev.Caption)
+	}
+	if prev.DateTime == nil {
+		t.Error("Previous.DateTime is nil, but every Apply has a date")
+	}
+}
+
+func mustCurrent(t *testing.T, sess *Session) CurrentPhoto {
+	t.Helper()
+	cur, err := sess.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cur
 }
 
 func TestSession_ResolveTimezoneAndElevation(t *testing.T) {

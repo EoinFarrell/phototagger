@@ -939,7 +939,10 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
         $('datetime-input').value = prev.dateTime || '';
         $('offset-input').value = prev.offset || '';
         setOffsetRequired(false);
-        offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
+        // Trust a copied offset rather than recomputing over it. The last
+        // photo may have had none (an untouched date with no offset in its
+        // EXIF), so a blank one is resolved from the pin instead.
+        offsetManuallyEdited = !!prev.offset;
       } else if (group === 'keywords') {
         resetKeywordEntry();
         setPhotoKeywords([...(prev.keywords || [])], { touched: false }); // touched below
@@ -949,6 +952,7 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
     });
 
     formState.touch(group);
+    if (group === 'dateTime' && !prev.offset) maybeResolveTimezone();
   }));
 });
 

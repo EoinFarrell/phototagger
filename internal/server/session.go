@@ -69,10 +69,11 @@ type Elevation interface {
 	Lookup(lat, lon float64) (float64, error)
 }
 
-// lastValues tracks, per field group, the most recently Applied values --
-// what the "same as previous" icons copy from. Skipped photos don't change
-// these, so the value keeps cascading across skips until the next Apply
-// that actually touches that group.
+// lastValues tracks, per field group, what the most recently Applied photo
+// ended up with -- what the "same as previous" icons copy from. Every Apply
+// records every group, Touched or not (issue #22); a group that photo had
+// no value for is nil. Skipped photos don't change these, so the values
+// carry across skips until the next Apply.
 type lastValues struct {
 	location *LocationFields
 	dateTime *DateTimeFields
@@ -357,9 +358,9 @@ type CurrentPhoto struct {
 	Previous PreviousValues
 }
 
-// PreviousValues is the previously-Applied value for each field group, used
-// by the "same as previous" icons. A nil pointer means no prior Apply has
-// touched that group yet this session.
+// PreviousValues is the previously-Applied photo's value for each field
+// group, used by the "same as previous" icons. A nil pointer means there's
+// been no Apply yet this session, or that photo had no value for the group.
 type PreviousValues struct {
 	Location *LocationFields
 	DateTime *DateTimeFields
@@ -626,24 +627,24 @@ func (s *Session) resolveSlug(req ApplyRequest) string {
 	return rename.Slugify(name)
 }
 
-// updateLastValues records the values from a group that was actually
-// touched, for the next photo's "same as previous" icons. Groups that
-// weren't touched keep whatever was recorded from an earlier Apply.
+// updateLastValues records what the Applied photo ended up with in every
+// group, Touched or not, for the next photo's "same as previous" icons.
+// The request carries each group's effective value either way: what the
+// user changed it to, or what the photo already had. A group with no
+// value (no pin, no keywords, a blank caption) is recorded as nil.
 func (s *Session) updateLastValues(req ApplyRequest) {
-	if req.LocationTouched && req.Lat != nil && req.Lon != nil {
+	s.last = lastValues{}
+	if req.Lat != nil && req.Lon != nil {
 		s.last.location = &LocationFields{Lat: *req.Lat, Lon: *req.Lon, Alt: req.Alt, LocatedKeyword: req.LocatedKeyword}
 	}
-	if req.DateTimeTouched {
-		dt, err := parseDateTimeLocal(req.DateTime)
-		if err == nil {
-			s.last.dateTime = &DateTimeFields{DateTime: dt, Offset: req.Offset}
-		}
+	if dt, err := parseDateTimeLocal(req.DateTime); err == nil {
+		s.last.dateTime = &DateTimeFields{DateTime: dt, Offset: req.Offset}
 	}
-	if req.KeywordsTouched {
+	if len(req.Keywords) > 0 {
 		kw := append([]string{}, req.Keywords...)
 		s.last.keywords = &kw
 	}
-	if req.CaptionTouched {
+	if req.Caption != "" {
 		caption := req.Caption
 		s.last.caption = &caption
 	}
