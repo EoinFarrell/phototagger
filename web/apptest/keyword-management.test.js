@@ -7,11 +7,11 @@
 // /api/keywords) moved here from the keyword pill's old inline × button --
 // see keywords.test.js for what the pills themselves still cover. Rename
 // (RenameKeyword, via POST /api/keywords/rename) is new: it changes a
-// keyword's text everywhere, prompting for the new name rather than an
-// inline editable field, matching this app's existing alert()/confirm()
-// interaction style. Edit location sets or clears a keyword's saved
-// Location (making it a located keyword, or a plain one again) from a small
-// map of its own, via POST/DELETE /api/keywords/location.
+// keyword's text everywhere. Both ask first in the shared in-page
+// dialog (#ask-dialog, issue #18), which also shows their errors. Edit
+// location sets or clears a keyword's saved Location (making it a located
+// keyword, or a plain one again) from a small map of its own, via
+// POST/DELETE /api/keywords/location.
 //
 // Run with: node --test web/apptest/keyword-management.test.js
 
@@ -84,8 +84,8 @@ test('each known keyword renders a Rename and a red Delete button', async () => 
 
 // ---- Delete ----
 
-test('deleting from the manage view asks for confirmation, then calls DELETE /api/keywords and drops it from the list', async () => {
-  const { elements, fetchMock, confirms } = await startSessionWithKeywords(['beach', 'family'], { keywords: ['beach'] });
+test('deleting from the manage view asks in the dialog, then calls DELETE /api/keywords and drops it from the list', async () => {
+  const { elements, fetchMock } = await startSessionWithKeywords(['beach', 'family'], { keywords: ['beach'] });
   assert.equal(elements['keywords-input'].value, 'beach');
 
   click(elements['manage-keywords-tag-button']);
@@ -96,9 +96,13 @@ test('deleting from the manage view asks for confirmation, then calls DELETE /ap
   clickManageDelete(elements, 'beach');
   await flushMicrotasks();
 
-  assert.equal(confirms.length, 1, 'expected a confirm() prompt before deleting');
-  assert.match(confirms[0], /Delete "beach"/);
+  assert.equal(elements['ask-dialog'].open, true, 'expected the confirmation dialog');
+  assert.match(elements['ask-title'].textContent, /Delete "beach"/);
+  assert.equal(elements['ask-input'].hidden, true, 'a confirmation has no text field');
+  assert.equal(fetchMock.countPending('/api/keywords'), 0, 'nothing is deleted before confirming');
 
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
   const del = fetchMock.log.find((e) => e.method === 'DELETE' && e.url.includes('/api/keywords'));
   assert.ok(del, 'expected a DELETE /api/keywords request');
   assert.deepEqual(del.body, { keyword: 'beach' });
@@ -106,51 +110,96 @@ test('deleting from the manage view asks for confirmation, then calls DELETE /ap
   fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['family']));
   await flushMicrotasks();
 
+  assert.equal(elements['ask-dialog'].open, false);
   assert.equal(elements['keywords-input'].value, '', 'deleted keyword must be dropped from the current field too');
   assert.doesNotMatch(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="family"/);
   assert.doesNotMatch(elements['keyword-pills'].innerHTML, /data-keyword="beach"/);
 });
 
-test('canceling the delete confirmation makes no request and leaves the row in place', async () => {
-  const { elements, fetchMock, confirmState } = loadApp();
-  confirmState.result = false;
-
-  click(elements['manage-keywords-start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
-  await flushMicrotasks();
+test('cancelling the delete dialog makes no request and leaves the row in place', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
 
   clickManageDelete(elements, 'beach');
   await flushMicrotasks();
+  click(elements['ask-cancel-button']);
+  await flushMicrotasks();
 
+  assert.equal(elements['ask-dialog'].open, false);
   assert.equal(fetchMock.countPending('/api/keywords'), 0, 'must not call the server when the user cancels');
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
 });
 
-test('a failed delete surfaces an alert and leaves the row in place', async () => {
-  const { elements, fetchMock, alerts } = loadApp();
-
-  click(elements['manage-keywords-start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
-  await flushMicrotasks();
+test('closing the delete dialog with Escape makes no request', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
 
   clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  // Escape closes a <dialog> natively and fires its close event.
+  elements['ask-dialog'].close();
+  elements['ask-dialog'].dispatchEvent({ type: 'close' });
+  await flushMicrotasks();
+
+  click(elements['ask-confirm-button']); // a stale click after closing does nothing
+  await flushMicrotasks();
+  assert.equal(fetchMock.countPending('/api/keywords'), 0);
+});
+
+test('a failed delete shows the error in the dialog, keeps it open, and leaves the row in place', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords', { error: 'boom' }, { ok: false });
   await flushMicrotasks();
 
-  assert.equal(alerts.length, 1);
-  assert.match(alerts[0], /boom/);
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.equal(elements['ask-error'].hidden, false);
+  assert.match(elements['ask-error'].textContent, /boom/);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
+});
+
+test('a network error during delete shows in the dialog instead of leaving it stuck', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  const entry = fetchMock.pending.find((e) => e.method === 'DELETE');
+  entry.settled = true;
+  entry.resolve(Promise.reject(new Error('network down')));
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.match(elements['ask-error'].textContent, /network down/);
+  assert.equal(elements['ask-confirm-button'].disabled, false, 'the user can retry');
+});
+
+test('Escape is ignored while a delete is in flight, so its result is still shown', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  let prevented = false;
+  elements['ask-dialog'].dispatchEvent({ type: 'cancel', preventDefault: () => { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(elements['ask-cancel-button'].disabled, true, 'Cancel waits too');
+
+  fetchMock.resolveMatching('/api/keywords', { error: 'boom' }, { ok: false });
+  await flushMicrotasks();
+  assert.match(elements['ask-error'].textContent, /boom/);
 });
 
 // ---- Rename ----
 
-test('renaming from the manage view prompts for the new name, then calls POST /api/keywords/rename and updates the list and pills', async () => {
-  const { elements, fetchMock, prompts, promptState } = await startSessionWithKeywords(['beach'], { keywords: ['beach'] });
-  promptState.result = 'seaside';
+test('renaming from the manage view asks for the new name in the dialog, then calls POST /api/keywords/rename and updates the list and pills', async () => {
+  const { elements, fetchMock } = await startSessionWithKeywords(['beach'], { keywords: ['beach'] });
 
   click(elements['manage-keywords-tag-button']);
   await flushMicrotasks();
@@ -160,8 +209,14 @@ test('renaming from the manage view prompts for the new name, then calls POST /a
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
 
-  assert.equal(prompts.length, 1);
-  assert.match(prompts[0], /Rename "beach"/);
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.match(elements['ask-title'].textContent, /Rename "beach"/);
+  assert.equal(elements['ask-input'].hidden, false);
+  assert.equal(elements['ask-input'].value, 'beach', 'the field starts with the current name');
+
+  elements['ask-input'].value = '  seaside ';
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
 
   const req = fetchMock.log.find((e) => e.method === 'POST' && e.url.includes('/api/keywords/rename'));
   assert.ok(req, 'expected a POST /api/keywords/rename request');
@@ -170,64 +225,109 @@ test('renaming from the manage view prompts for the new name, then calls POST /a
   fetchMock.resolveMatching('/api/keywords/rename', toKeywordObjs(['seaside']));
   await flushMicrotasks();
 
+  assert.equal(elements['ask-dialog'].open, false);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="seaside"/);
   assert.doesNotMatch(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
   assert.match(elements['keyword-pills'].innerHTML, /data-keyword="seaside"/);
   assert.equal(elements['keywords-input'].value, 'seaside', 'the queued-but-unapplied keyword should follow the rename');
 });
 
-test('canceling the rename prompt makes no request', async () => {
-  const { elements, fetchMock, promptState } = loadApp();
-  promptState.result = null; // prompt()'s "Cancel" return value
-
-  click(elements['manage-keywords-start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
-  await flushMicrotasks();
+test('Enter in the rename field confirms', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
 
   clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  elements['ask-input'].dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  await flushMicrotasks();
+
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 1);
+});
+
+test("the delete dialog's confirm button is red; the rename dialog's is not", async () => {
+  const { elements } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].classList.contains('danger'), true);
+  click(elements['ask-cancel-button']);
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  assert.equal(elements['ask-confirm-button'].classList.contains('danger'), false);
+});
+
+test('cancelling the rename dialog makes no request', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  click(elements['ask-cancel-button']);
   await flushMicrotasks();
 
   assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
 });
 
-test('leaving the prompt unchanged or blank makes no request', async () => {
-  const { elements, fetchMock, promptState } = loadApp();
+test('a blank new name is refused inline, keeping the dialog open', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
 
-  click(elements['manage-keywords-start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
-  await flushMicrotasks();
-
-  promptState.result = 'beach'; // unchanged
   clickManageRename(elements, 'beach');
   await flushMicrotasks();
-
-  promptState.result = '   '; // blank after trimming
-  clickManageRename(elements, 'beach');
+  elements['ask-input'].value = '   ';
+  click(elements['ask-confirm-button']);
   await flushMicrotasks();
 
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.equal(elements['ask-error'].hidden, false);
+  assert.match(elements['ask-error'].textContent, /name/i);
   assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
 });
 
-test('a failed rename surfaces an alert and leaves the row in place', async () => {
-  const { elements, fetchMock, alerts, promptState } = loadApp();
-  promptState.result = 'family';
-
-  click(elements['manage-keywords-start-button']);
-  await flushMicrotasks();
-  fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach', 'family']));
-  await flushMicrotasks();
+test('an unchanged name closes the dialog without a request', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
 
   clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, false);
+  assert.equal(fetchMock.countPending('/api/keywords/rename'), 0);
+});
+
+test('a failed rename shows the error in the dialog and leaves the row in place', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach', 'family']);
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'family';
+  click(elements['ask-confirm-button']);
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords/rename', { error: 'keyword "family" already exists' }, { ok: false });
   await flushMicrotasks();
 
-  assert.equal(alerts.length, 1);
-  assert.match(alerts[0], /already exists/);
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.match(elements['ask-error'].textContent, /already exists/);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
+});
+
+test('a new dialog starts without the previous one\'s error', async () => {
+  const { elements, fetchMock } = await openManageFromStart(['beach']);
+
+  clickManageDelete(elements, 'beach');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', { error: 'boom' }, { ok: false });
+  await flushMicrotasks();
+  click(elements['ask-cancel-button']);
+  await flushMicrotasks();
+
+  clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  assert.equal(elements['ask-error'].hidden, true);
 });
 
 // ---- Edit location ----
@@ -282,7 +382,7 @@ test('Edit location on a located keyword opens a map pinned at its Location, and
 });
 
 test('Edit location on a plain keyword from the start screen starts with no pin; Save needs one', async () => {
-  const { elements, fetchMock, alerts, created } = await openManageFromStart(['beach']);
+  const { elements, fetchMock, created } = await openManageFromStart(['beach']);
 
   clickManageEditLocation(elements, 'beach');
   assert.equal(manageMarker(created), undefined);
@@ -290,7 +390,8 @@ test('Edit location on a plain keyword from the start screen starts with no pin;
 
   click(elements['manage-location-save-button']);
   await flushMicrotasks();
-  assert.match(alerts[0], /pin/);
+  assert.equal(elements['manage-location-error'].hidden, false);
+  assert.match(elements['manage-location-error'].textContent, /pin/);
   assert.equal(fetchMock.countPending('/api/keywords/location'), 0);
 });
 
@@ -384,18 +485,22 @@ test('Cancel closes the editor without a request; editing another keyword switch
 });
 
 test('deleting or renaming the keyword being edited closes the editor, so Save can\'t recreate the old name', async () => {
-  const { elements, fetchMock, promptState } = await openManageFromStart([CONCERT, 'beach']);
+  const { elements, fetchMock } = await openManageFromStart([CONCERT, 'beach']);
 
   clickManageEditLocation(elements, 'concert');
   clickManageDelete(elements, 'concert');
+  await flushMicrotasks();
+  click(elements['ask-confirm-button']);
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords', toKeywordObjs(['beach']));
   await flushMicrotasks();
   assert.equal(elements['manage-location-editor'].open, false);
 
   clickManageEditLocation(elements, 'beach');
-  promptState.result = 'seaside';
   clickManageRename(elements, 'beach');
+  await flushMicrotasks();
+  elements['ask-input'].value = 'seaside';
+  click(elements['ask-confirm-button']);
   await flushMicrotasks();
   fetchMock.resolveMatching('/api/keywords/rename', toKeywordObjs(['seaside']));
   await flushMicrotasks();

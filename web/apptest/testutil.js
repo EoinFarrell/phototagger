@@ -16,6 +16,10 @@ class FakeClassList {
   add(c) { this._set.add(c); }
   remove(c) { this._set.delete(c); }
   contains(c) { return this._set.has(c); }
+  toggle(c, force = !this._set.has(c)) {
+    if (force) this._set.add(c); else this._set.delete(c);
+    return force;
+  }
 }
 
 class FakeElement {
@@ -41,6 +45,8 @@ class FakeElement {
   showModal() { this.open = true; }
   close() { this.open = false; }
   focus() {}
+  // Like the real HTMLElement.click(), a disabled button ignores it.
+  click() { if (!this.disabled) this.dispatchEvent({ type: 'click', target: this }); }
   addEventListener(evt, cb) { (this._listeners[evt] = this._listeners[evt] || []).push(cb); }
   dispatchEvent(evt) {
     (this._listeners[evt.type] || []).slice().forEach((cb) => cb(evt));
@@ -92,6 +98,12 @@ const ELEMENT_META = {
   'tag-progress': [], 'tag-progress-bar': ['PROGRESS'], 'tag-relpath': [], 'preview-img': [],
   'photo-facts': [],
   'toast': [],
+  'tag-error': [], 'tag-error-message': [], 'tag-error-dismiss': ['BUTTON'],
+  'located-keyword-error': [],
+  'manage-location-error': [],
+  'ask-dialog': [], 'ask-title': [], 'ask-message': [],
+  'ask-input': ['INPUT', 'text'], 'ask-error': [],
+  'ask-cancel-button': ['BUTTON'], 'ask-confirm-button': ['BUTTON'],
   'skip-button': ['BUTTON'],
   'prev-button': ['BUTTON'],
   'apply-button': ['BUTTON'],
@@ -240,30 +252,13 @@ function loadApp() {
   const { document, elements, sameAsPrevButtons, modeRadios, geoRadios } = buildDom();
   const { L, created } = buildFakeLeaflet();
   const fetchMock = buildFetchMock();
-  const alerts = [];
-  const confirms = [];
-  const prompts = [];
-  // deleteKeyword's confirm() gate defaults to "OK" so tests that don't care
-  // about the prompt (most of them) aren't forced to set this up -- tests
-  // covering the cancel path set it to false via the returned confirm object.
-  const confirmState = { result: true };
-  // renameKeyword's prompt() gate defaults to returning its own default
-  // value unchanged (the second prompt() argument -- the keyword's current
-  // name) so tests that don't care about renaming aren't forced to set this
-  // up; a test covering rename sets promptState.result to the new name, and
-  // the cancel path sets it to null (prompt()'s own "Cancel" return value).
-  const promptState = { result: undefined };
 
+  // No alert/confirm/prompt: app.js uses in-page dialogs and messages
+  // (issue #18), so a stray call throws here instead of passing silently.
   const sandbox = {
     document,
     L,
     fetch: fetchMock,
-    alert: (msg) => alerts.push(msg),
-    confirm: (msg) => { confirms.push(msg); return confirmState.result; },
-    prompt: (msg, defaultValue) => {
-      prompts.push(msg);
-      return promptState.result === undefined ? defaultValue : promptState.result;
-    },
     console,
     Date, JSON, Math, parseFloat, parseInt, Object, Array, Promise, setTimeout, clearTimeout, setImmediate,
   };
@@ -274,8 +269,7 @@ function loadApp() {
   vm.runInContext(src, sandbox, { filename: APP_JS });
 
   return {
-    elements, fetchMock, alerts, confirms, confirmState, prompts, promptState,
-    created, document, sameAsPrevButtons, modeRadios, geoRadios,
+    elements, fetchMock, created, document, sameAsPrevButtons, modeRadios, geoRadios,
   };
 }
 

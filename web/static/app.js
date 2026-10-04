@@ -43,6 +43,122 @@ function switchView(name) {
   $('done-view').hidden = name !== 'done';
 }
 
+// ---- Messages and the shared dialog ----
+
+// Inline messages (issue #18): each sits next to what it's about, and is
+// shown or cleared by setting its text.
+function showMessage(id, text) {
+  $(id).textContent = text;
+  $(id).hidden = false;
+}
+
+function clearMessage(id) {
+  $(id).textContent = '';
+  $(id).hidden = true;
+}
+
+// The server's error text for a failed response, else its status text.
+async function responseError(res) {
+  const body = await res.json().catch(() => ({}));
+  return body.error || res.statusText;
+}
+
+// ask() opens #ask-dialog -- the one in-page dialog behind every
+// confirmation and text prompt -- and resolves once it closes. `input`
+// (a starting value) adds a text field. `onConfirm(value)` runs the action
+// with the dialog still open and returns an error message to show inline
+// (keeping it open for another try or Cancel), or '' to close. Cancel,
+// Escape, or closing it any other way resolve without calling onConfirm --
+// except while onConfirm is running, when both are held off so its result
+// (success or error) is never lost.
+let askPending = null;
+
+function setAskRunning(running) {
+  $('ask-confirm-button').disabled = running;
+  $('ask-cancel-button').disabled = running;
+}
+
+function ask({ title, message = '', input = null, confirmLabel, danger = false, onConfirm }) {
+  if (askPending) finishAsk(); // never strand an earlier caller's promise
+  $('ask-title').textContent = title;
+  $('ask-message').textContent = message;
+  $('ask-message').hidden = message === '';
+  $('ask-input').hidden = input === null;
+  $('ask-input').value = input === null ? '' : input;
+  clearMessage('ask-error');
+  $('ask-confirm-button').textContent = confirmLabel;
+  $('ask-confirm-button').classList.toggle('danger', danger);
+  $('ask-confirm-button').classList.toggle('outline', danger);
+  setAskRunning(false);
+  const opener = document.activeElement;
+  return new Promise((resolve) => {
+    askPending = { onConfirm, resolve, opener };
+    $('ask-dialog').showModal();
+    if (input !== null) $('ask-input').focus();
+  });
+}
+
+function finishAsk() {
+  const pending = askPending;
+  askPending = null;
+  if ($('ask-dialog').open) $('ask-dialog').close();
+  // A row button re-rendered by the action is detached; focus falls back
+  // to the page then.
+  if (pending.opener && pending.opener.isConnected) pending.opener.focus();
+  pending.resolve();
+}
+
+$('ask-confirm-button').addEventListener('click', async () => {
+  const pending = askPending;
+  if (!pending) return;
+  setAskRunning(true);
+  let error;
+  try {
+    error = await pending.onConfirm($('ask-input').value);
+  } catch (e) {
+    error = e.message;
+  }
+  setAskRunning(false);
+  if (error) {
+    showMessage('ask-error', error);
+  } else {
+    finishAsk();
+  }
+});
+
+$('ask-cancel-button').addEventListener('click', () => {
+  if (askPending) finishAsk();
+});
+
+// Enter in the text field confirms, as it would in a form.
+$('ask-input').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  $('ask-confirm-button').click();
+});
+
+// Escape fires cancel, then closes the <dialog> natively (bypassing the
+// Cancel button); hold it off while onConfirm runs.
+$('ask-dialog').addEventListener('cancel', (e) => {
+  if ($('ask-cancel-button').disabled) e.preventDefault();
+});
+$('ask-dialog').addEventListener('close', () => {
+  if (askPending) finishAsk();
+});
+
+// The tagging screen's banner, for a failed Skip/Prev/Apply. Dismissible,
+// and cleared by the next navigation that succeeds.
+function showTagError(text) {
+  $('tag-error-message').textContent = text;
+  $('tag-error').hidden = false;
+}
+
+function clearTagError() {
+  $('tag-error').hidden = true;
+}
+
+$('tag-error-dismiss').addEventListener('click', clearTagError);
+
 // ---- Start screen ----
 
 async function loadState() {
@@ -201,20 +317,16 @@ function replaceKnownKeywords(list) {
 }
 
 // Sets kw's Location via POST /api/keywords/location (creating kw if it's
-// new), writing immediately rather than waiting for Apply. Returns whether
-// it succeeded, having already alerted if not.
+// new), writing immediately rather than waiting for Apply. Returns an error
+// message for the caller to show, or '' on success.
 async function saveKeywordLocation(kw, lat, lon, alt) {
   const res = await fetch('/api/keywords/location', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keyword: kw, lat, lon, alt }),
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    alert(`Failed to save location for "${kw}": ${body.error || res.statusText}`);
-    return false;
-  }
+  if (!res.ok) return `Couldn't save the location for "${kw}": ${await responseError(res)}`;
   replaceKnownKeywords(await res.json());
-  return true;
+  return '';
 }
 
 function findKnownKeyword(kw) {
@@ -287,23 +399,30 @@ function mergeKnownKeywords(kws) {
 // Deletes kw from the known-keywords list and strips it from every photo in
 // the source directory that currently has it (not just the one on screen),
 // via DELETE /api/keywords -- see internal/server/session.go's
-// DeleteKeyword. Confirmed first since, unlike the rest of this form, it
-// writes to disk immediately rather than waiting for Apply. Called from the
-// manage-view's "Delete" button (see "---- Keyword management ----" below).
-async function deleteKeyword(kw) {
-  if (!confirm(`Delete "${kw}"?\n\nThis removes it from every photo in this folder that has it, not just this one, and can't be undone from here.`)) {
-    return;
-  }
-  const res = await fetch('/api/keywords', {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ keyword: kw }),
+// DeleteKeyword. Confirmed first in the dialog since, unlike the rest of
+// this form, it writes to disk immediately rather than waiting for Apply.
+// Called from the manage-view's "Delete" button (see "---- Keyword
+// management ----" below).
+function deleteKeyword(kw) {
+  return ask({
+    title: `Delete "${kw}"?`,
+    message: "This removes it from every photo in this folder that has it, not just this one, and can't be undone from here.",
+    confirmLabel: 'Delete',
+    danger: true,
+    onConfirm: async () => {
+      const res = await fetch('/api/keywords', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword: kw }),
+      });
+      if (!res.ok) return `Couldn't delete "${kw}": ${await responseError(res)}`;
+      dropKnownKeyword(kw);
+      return '';
+    },
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    alert(`Failed to delete "${kw}": ${body.error || res.statusText}`);
-    return;
-  }
+}
+
+function dropKnownKeyword(kw) {
   // Filter locally rather than replacing knownKeywords with the server's
   // response: the server's keywords.json only has what's been Applied, but
   // knownKeywords also carries keywords merged in from an unApplied photo's
@@ -325,27 +444,30 @@ async function deleteKeyword(kw) {
 // Renames kw to a new name everywhere -- every photo in the folder carrying
 // it, and the known-keywords list itself (preserving its Location) -- via
 // POST /api/keywords/rename (internal/server/session.go's RenameKeyword).
-// Prompts for the new name rather than an inline editable field, matching
-// this app's existing lightweight alert()/confirm() interaction style
-// instead of adding per-row input-field state. A cancelled prompt (null) or
-// one left unchanged/blank is a silent no-op.
-async function renameKeyword(kw) {
-  const newName = prompt(`Rename "${kw}" to:`, kw);
-  if (newName === null) return;
-  const trimmed = newName.trim();
-  if (trimmed === '' || trimmed === kw) return;
-
-  const res = await fetch('/api/keywords/rename', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ oldKeyword: kw, newKeyword: trimmed }),
+// Asks for the new name in the dialog rather than an inline editable field
+// per row. A blank name is refused inline; an unchanged one just closes.
+function renameKeyword(kw) {
+  return ask({
+    title: `Rename "${kw}"`,
+    input: kw,
+    confirmLabel: 'Rename',
+    onConfirm: async (value) => {
+      const newName = value.trim();
+      if (newName === '') return 'Enter a name.';
+      if (newName === kw) return '';
+      const res = await fetch('/api/keywords/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ oldKeyword: kw, newKeyword: newName }),
+      });
+      if (!res.ok) return `Couldn't rename "${kw}": ${await responseError(res)}`;
+      applyRenameLocally(kw, newName, await res.json());
+      return '';
+    },
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    alert(`Failed to rename "${kw}": ${body.error || res.statusText}`);
-    return;
-  }
-  const renamed = await res.json();
+}
+
+function applyRenameLocally(kw, newName, renamed) {
   // If the field being edited still has the old name queued (not yet
   // Applied), carry the rename into it too, rather than leaving a now-
   // nonexistent keyword sitting in the current photo's field. Done before
@@ -354,7 +476,7 @@ async function renameKeyword(kw) {
     const current = parseKeywords($('keywords-input').value);
     const idx = current.indexOf(kw);
     if (idx !== -1) {
-      current[idx] = trimmed;
+      current[idx] = newName;
       $('keywords-input').value = current.join(', ');
     }
   });
@@ -378,6 +500,7 @@ $('located-keyword-pills').addEventListener('click', formState.guardedField(onPi
 $('save-located-keyword-toggle').addEventListener('click', () => {
   const row = $('save-located-keyword-row');
   row.hidden = !row.hidden;
+  clearMessage('located-keyword-error');
   if (!row.hidden) $('located-keyword-name-input').focus();
 });
 
@@ -386,24 +509,28 @@ $('save-located-keyword-toggle').addEventListener('click', () => {
 // (re)locating an existing one.
 $('save-located-keyword-button').addEventListener('click', formState.guarded(async () => {
   if (!marker) {
-    alert('Drop a pin on the map first.');
+    showMessage('located-keyword-error', 'Drop a pin on the map first.');
     return;
   }
   const name = $('located-keyword-name-input').value.trim();
   if (!name) {
-    alert('Enter a name for this located keyword.');
+    showMessage('located-keyword-error', 'Enter a name for this located keyword.');
     return;
   }
   const altVal = $('altitude-input').value;
   if (altVal === '') {
-    alert('Altitude is still loading — wait a moment, or enter it manually, then try again.');
+    showMessage('located-keyword-error', 'Altitude is still loading — wait a moment, or enter it manually, then try again.');
     return;
   }
   const ll = marker.getLatLng();
-  if (await saveKeywordLocation(name, ll.lat, ll.lng, parseFloat(altVal))) {
-    $('located-keyword-name-input').value = '';
-    $('save-located-keyword-row').hidden = true;
+  const error = await saveKeywordLocation(name, ll.lat, ll.lng, parseFloat(altVal));
+  if (error) {
+    showMessage('located-keyword-error', error);
+    return;
   }
+  clearMessage('located-keyword-error');
+  $('located-keyword-name-input').value = '';
+  $('save-located-keyword-row').hidden = true;
 }));
 
 // ---- Keyword management (rename/delete) ----
@@ -494,6 +621,7 @@ function openLocationEditor(kw) {
   $('manage-location-keyword').textContent = kw;
   $('manage-location-status').textContent = formatLocation(known && known.location);
   $('manage-location-clear-button').disabled = !(known && known.location);
+  clearMessage('manage-location-error');
   if (!$('manage-location-editor').open) $('manage-location-editor').showModal();
 
   if (!manageMap) {
@@ -548,15 +676,18 @@ $('manage-location-save-button').addEventListener('click', async () => {
   const kw = editingKeyword;
   if (!kw) return;
   if (!manageMarker) {
-    alert('Click the map to place a pin first.');
+    showMessage('manage-location-error', 'Click the map to place a pin first.');
     return;
   }
   const ll = manageMarker.getLatLng();
   const alt = editingAlt !== null ? editingAlt : await lookupAltitude(ll.lat, ll.lng);
-  if (await saveKeywordLocation(kw, ll.lat, ll.lng, alt)) {
-    renderManageKeywordsList();
-    closeLocationEditor();
+  const error = await saveKeywordLocation(kw, ll.lat, ll.lng, alt);
+  if (error) {
+    showMessage('manage-location-error', error);
+    return;
   }
+  renderManageKeywordsList();
+  closeLocationEditor();
 });
 
 $('manage-location-clear-button').addEventListener('click', async () => {
@@ -567,8 +698,7 @@ $('manage-location-clear-button').addEventListener('click', async () => {
     body: JSON.stringify({ keyword: kw }),
   });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    alert(`Failed to clear location for "${kw}": ${body.error || res.statusText}`);
+    showMessage('manage-location-error', `Couldn't clear the location for "${kw}": ${await responseError(res)}`);
     return;
   }
   replaceKnownKeywords(await res.json());
@@ -703,6 +833,7 @@ function renderCurrent(data) {
   formState.invalidateElevation();
   $('additional-details').open = false;
   $('save-located-keyword-row').hidden = true;
+  clearMessage('located-keyword-error');
 
   const ex = data.existing || {};
   $('photo-facts').textContent = photoFacts(ex, data.camera);
@@ -771,14 +902,12 @@ async function runNavigation(action, fetchFn) {
   setBusy(true);
   try {
     const res = await fetchFn();
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || res.statusText);
-    }
+    if (!res.ok) throw new Error(await responseError(res));
+    clearTagError();
     renderCurrent(await res.json());
   } catch (e) {
     setBusy(false);
-    alert(`Could not ${action}: ` + e.message);
+    showTagError(`Could not ${action}: ${e.message}`);
   }
 }
 

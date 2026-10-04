@@ -83,3 +83,12 @@ test('the class-based jade Pico build is linked, for its button variants and acc
 test('style.css takes its reds from the theme, not a hard-coded colour', () => {
   assert.doesNotMatch(css, /#d63535/i);
 });
+
+test('app.js uses in-page dialogs and messages, never alert/confirm/prompt', () => {
+  assert.doesNotMatch(appJs, /\b(alert|confirm|prompt)\(/);
+});
+
+test('the shared confirm/rename dialog is a <dialog>, and the tagging error banner is announced', () => {
+  assert.match(html, /<dialog id="ask-dialog"/);
+  assert.match(html, /id="tag-error"[^>]*role="alert"|role="alert"[^>]*id="tag-error"/);
+});

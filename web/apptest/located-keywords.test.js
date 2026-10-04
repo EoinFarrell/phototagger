@@ -104,12 +104,13 @@ test('a new photo starts with no located keyword naming its file', async () => {
 });
 
 test('"Save pin as located keyword" requires a pin and a name', async () => {
-  const { elements, fetchMock, alerts, created } = await startSessionWithKeywords([]);
+  const { elements, fetchMock, created } = await startSessionWithKeywords([]);
 
   elements['located-keyword-name-input'].value = 'Pachacaid';
   click(elements['save-located-keyword-button']);
   await flushMicrotasks();
-  assert.match(alerts[0], /Drop a pin/);
+  assert.equal(elements['located-keyword-error'].hidden, false);
+  assert.match(elements['located-keyword-error'].textContent, /Drop a pin/);
 
   created.maps[0]._simulateClick(43.19, 6.47);
   fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 65 });
@@ -117,7 +118,7 @@ test('"Save pin as located keyword" requires a pin and a name', async () => {
   elements['located-keyword-name-input'].value = '  ';
   click(elements['save-located-keyword-button']);
   await flushMicrotasks();
-  assert.match(alerts[1], /name/);
+  assert.match(elements['located-keyword-error'].textContent, /name/);
 
   assert.equal(fetchMock.countPending('/api/keywords/location'), 0);
 });

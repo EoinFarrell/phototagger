@@ -45,6 +45,11 @@
     <span id="tag-relpath"></span>
   </header>
 
+  <div id="tag-error" role="alert" hidden>
+    <span id="tag-error-message"></span>
+    <button type="button" id="tag-error-dismiss" class="secondary outline small" aria-label="Dismiss">✕</button>
+  </div>
+
   <div id="tag-body">
     <div id="preview-pane">
       <img id="preview-img" alt="current photo preview">
@@ -63,6 +68,7 @@
           <input type="text" id="located-keyword-name-input" placeholder="Keyword for this place…" aria-label="Located keyword name">
           <button type="button" id="save-located-keyword-button" class="small">Save</button>
         </div>
+        <p id="located-keyword-error" class="field-error" role="alert" hidden></p>
       </fieldset>
 
       <fieldset data-group="dateTime">
@@ -114,7 +120,8 @@
       <header>Location for <strong id="manage-location-keyword"></strong> <span id="manage-location-status"></span></header>
       <p>Click the map to place the pin.</p>
       <div id="manage-location-map"></div>
-      <footer id="manage-location-actions">
+      <p id="manage-location-error" class="field-error" role="alert" hidden></p>
+      <footer class="dialog-actions">
         <button type="button" id="manage-location-cancel-button" class="secondary outline">Cancel</button>
         <button type="button" id="manage-location-clear-button" class="danger outline">Clear</button>
         <button type="button" id="manage-location-save-button">Save</button>
@@ -123,6 +130,19 @@
   </dialog>
   <ul id="manage-keywords-list"></ul>
 </section>
+
+<dialog id="ask-dialog">
+  <article>
+    <h3 id="ask-title"></h3>
+    <p id="ask-message"></p>
+    <input type="text" id="ask-input" aria-labelledby="ask-title" hidden>
+    <p id="ask-error" class="field-error" role="alert" hidden></p>
+    <footer class="dialog-actions">
+      <button type="button" id="ask-cancel-button" class="secondary outline">Cancel</button>
+      <button type="button" id="ask-confirm-button">OK</button>
+    </footer>
+  </article>
+</dialog>
 
 <section id="done-view" class="view" hidden>
   <h1>All done</h1>

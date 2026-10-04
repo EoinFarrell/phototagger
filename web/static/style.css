@@ -296,8 +296,34 @@ legend {
 #manage-location-editor > article { width: 100%; max-width: 760px; }
 #manage-location-status { margin-left: 0.5rem; color: var(--pico-muted-color); font-size: 0.85em; }
 #manage-location-map { height: 360px; margin: 0.5rem 0; }
-#manage-location-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
-#manage-location-actions button { width: auto; margin: 0; }
+/* A dialog's button row: right-aligned, buttons at their natural width. */
+.dialog-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
+.dialog-actions button { width: auto; margin: 0; }
+
+/* ---- Messages and the shared dialog ---- */
+
+.field-error {
+  margin: 0.35rem 0 0;
+  color: var(--pico-del-color);
+  font-size: 0.85em;
+}
+
+#tag-error {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.6rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid var(--pico-del-color);
+  border-radius: var(--pico-border-radius);
+  color: var(--pico-del-color);
+}
+#tag-error[hidden] { display: none; }
+#tag-error-message { flex: 1; }
+
+#ask-dialog > article { width: 100%; max-width: 480px; }
+#ask-title { margin-bottom: 0.75rem; font-size: 1.15rem; }
+#ask-input { margin-bottom: 0; }
 
 /* ---- Done ---- */
 
