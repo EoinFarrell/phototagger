@@ -62,7 +62,6 @@
           <button type="button" class="same-as-prev" data-group="location" title="Same as last (location)" aria-label="Same as last (location)">↩ Same as last</button>
           <button type="button" id="save-located-keyword-toggle" class="outline secondary small legend-end">📍 Save as located keyword…</button>
         </legend>
-        <div id="located-keyword-pills"></div>
         <div id="map"></div>
         <div id="save-located-keyword-row" hidden>
           <input type="text" id="located-keyword-name-input" placeholder="Keyword for this place…" aria-label="Located keyword name">
@@ -83,8 +82,13 @@
           <button type="button" class="same-as-prev" data-group="keywords" title="Same as last (keywords)" aria-label="Same as last (keywords)">↩ Same as last</button>
           <button type="button" id="manage-keywords-tag-button" class="outline secondary small legend-end">Manage keywords…</button>
         </legend>
-        <input type="text" id="keywords-input" placeholder="Comma-separated" aria-label="Keywords, comma-separated">
-        <div id="keyword-pills"></div>
+        <div id="keyword-field">
+          <span id="keyword-chips"></span>
+          <input type="text" id="keyword-entry" placeholder="Add a keyword…" aria-label="Add a keyword"
+                 role="combobox" aria-autocomplete="list" aria-controls="keyword-suggestions" aria-expanded="false" autocomplete="off">
+        </div>
+        <ul id="keyword-suggestions" role="listbox" aria-label="Known keywords" hidden></ul>
+        <p id="keyword-status" class="visually-hidden" role="status" aria-live="polite"></p>
       </fieldset>
 
       <fieldset data-group="caption">

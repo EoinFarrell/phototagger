@@ -14,6 +14,19 @@ body {
 
 .view[hidden] { display: none; }
 
+/* Read by screen readers, not shown. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---- Buttons ---- */
 
 /* Pico has no small size; used for row actions and rarely-needed controls
@@ -225,31 +238,88 @@ legend {
   margin-top: 0.5rem;
 }
 #save-located-keyword-row input { margin: 0; }
-#keywords-input { margin-bottom: 0; }
 
-#keyword-pills,
-#located-keyword-pills { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.4rem; }
+/* The tag input: chips and the entry share one input-like box. */
+fieldset[data-group="keywords"] { position: relative; }
 
-.keyword-pill {
+#keyword-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.3rem 0.4rem;
+  border: var(--pico-border-width) solid var(--pico-form-element-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-form-element-background-color);
+  cursor: text;
+}
+#keyword-field:focus-within {
+  border-color: var(--pico-form-element-focus-color);
+  box-shadow: 0 0 0 var(--pico-outline-width) var(--pico-primary-focus);
+}
+#keyword-chips { display: contents; }
+
+.keyword-pin { margin-right: 0.25rem; }
+
+.keyword-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.1rem 0.25rem 0.1rem 0.6rem;
+  border-radius: 999px;
+  background: var(--pico-primary-background);
+  color: var(--pico-primary-inverse);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.keyword-chip-remove {
   width: auto;
   margin: 0;
-  padding: 0.15rem 0.7rem;
-  font-size: 0.8em;
-  border-radius: 999px;
+  padding: 0 0.3rem;
+  border: 0;
   background: transparent;
-  /* Pico's own button{} rule scopes --pico-color to its primary-inverse
-     (near-white) value for filled buttons; reset it here or this pill's
-     text inherits that and goes unreadable against the transparent bg. */
-  --pico-color: var(--pico-muted-color);
-  color: var(--pico-color);
-  border-color: var(--pico-muted-border-color);
+  --pico-color: inherit;
+  color: inherit;
+  line-height: 1.2;
+  box-shadow: none;
 }
 
-.keyword-pill.active {
-  background: var(--pico-primary);
-  color: var(--pico-primary-inverse);
-  border-color: var(--pico-primary);
+#keyword-field #keyword-entry {
+  flex: 1;
+  min-width: 8rem;
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0.2rem 0.3rem;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
 }
+
+#keyword-suggestions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 1001; /* over the sticky footer */
+  max-height: 14rem;
+  margin: 0.2rem 0 0;
+  padding: 0.25rem 0;
+  overflow-y: auto;
+  list-style: none;
+  border: var(--pico-border-width) solid var(--pico-form-element-border-color);
+  border-radius: var(--pico-border-radius);
+  background: var(--pico-background-color);
+  box-shadow: var(--pico-box-shadow);
+}
+#keyword-suggestions[hidden] { display: none; }
+.keyword-suggestion {
+  margin: 0;
+  padding: 0.3rem 0.75rem;
+  list-style: none;
+  cursor: pointer;
+}
+.keyword-suggestion:hover,
+.keyword-suggestion.active { background: var(--pico-form-element-selected-background-color); }
 
 #offset-input.required-missing { outline: 2px solid var(--pico-del-color); }
 

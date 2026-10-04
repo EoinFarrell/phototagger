@@ -4,8 +4,8 @@
 // opened from), listing every known keyword with Rename/Delete actions.
 //
 // Delete (internal/server/session.go's DeleteKeyword, via DELETE
-// /api/keywords) moved here from the keyword pill's old inline × button --
-// see keywords.test.js for what the pills themselves still cover. Rename
+// /api/keywords) moved here from the old keyword pills' inline × button --
+// see keywords.test.js for the tagging form's tag input. Rename
 // (RenameKeyword, via POST /api/keywords/rename) is new: it changes a
 // keyword's text everywhere. Both ask first in the shared in-page
 // dialog (#ask-dialog, issue #18), which also shows their errors. Edit
@@ -20,6 +20,7 @@ const assert = require('node:assert/strict');
 const {
   flushMicrotasks, click, clickManageRename, clickManageDelete, clickManageEditLocation,
   toKeywordObjs, startSessionWithKeywords, loadApp,
+  chipKeywords, suggestionKeywords, openKeywordSuggestions,
 } = require('./testutil');
 
 test('"Manage keywords…" from the start screen fetches keywords and opens the manage view', async () => {
@@ -86,7 +87,7 @@ test('each known keyword renders a Rename and a red Delete button', async () => 
 
 test('deleting from the manage view asks in the dialog, then calls DELETE /api/keywords and drops it from the list', async () => {
   const { elements, fetchMock } = await startSessionWithKeywords(['beach', 'family'], { keywords: ['beach'] });
-  assert.equal(elements['keywords-input'].value, 'beach');
+  assert.deepEqual(chipKeywords(elements), ['beach']);
 
   click(elements['manage-keywords-tag-button']);
   await flushMicrotasks();
@@ -111,10 +112,16 @@ test('deleting from the manage view asks in the dialog, then calls DELETE /api/k
   await flushMicrotasks();
 
   assert.equal(elements['ask-dialog'].open, false);
-  assert.equal(elements['keywords-input'].value, '', 'deleted keyword must be dropped from the current field too');
+  assert.deepEqual(chipKeywords(elements), [], 'deleted keyword must be dropped from the current photo too');
   assert.doesNotMatch(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="family"/);
-  assert.doesNotMatch(elements['keyword-pills'].innerHTML, /data-keyword="beach"/);
+  openKeywordSuggestions(elements);
+  assert.deepEqual(suggestionKeywords(elements), ['family']);
+  click(elements['manage-back-button']);
+  click(elements['apply-button']);
+  await flushMicrotasks();
+  const applied = fetchMock.log.find((e) => e.url.includes('/api/photo/apply')).body;
+  assert.equal(applied.keywordsTouched, false, 'a delete everywhere isn\'t an edit to this photo');
 });
 
 test('cancelling the delete dialog makes no request and leaves the row in place', async () => {
@@ -198,7 +205,7 @@ test('Escape is ignored while a delete is in flight, so its result is still show
 
 // ---- Rename ----
 
-test('renaming from the manage view asks for the new name in the dialog, then calls POST /api/keywords/rename and updates the list and pills', async () => {
+test('renaming from the manage view asks for the new name in the dialog, then calls POST /api/keywords/rename and updates the list and the photo\'s keywords', async () => {
   const { elements, fetchMock } = await startSessionWithKeywords(['beach'], { keywords: ['beach'] });
 
   click(elements['manage-keywords-tag-button']);
@@ -228,8 +235,13 @@ test('renaming from the manage view asks for the new name in the dialog, then ca
   assert.equal(elements['ask-dialog'].open, false);
   assert.match(elements['manage-keywords-list'].innerHTML, /data-keyword="seaside"/);
   assert.doesNotMatch(elements['manage-keywords-list'].innerHTML, /data-keyword="beach"/);
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="seaside"/);
-  assert.equal(elements['keywords-input'].value, 'seaside', 'the queued-but-unapplied keyword should follow the rename');
+  assert.deepEqual(chipKeywords(elements), ['seaside'], 'the queued-but-unapplied keyword should follow the rename');
+  click(elements['manage-back-button']);
+  click(elements['apply-button']);
+  await flushMicrotasks();
+  const applied = fetchMock.log.find((e) => e.url.includes('/api/photo/apply')).body;
+  assert.equal(applied.keywordsTouched, false, 'a rename everywhere isn\'t an edit to this photo');
+  assert.deepEqual(applied.keywords, ['seaside']);
 });
 
 test('Enter in the rename field confirms', async () => {
@@ -449,7 +461,7 @@ test('Edit location opened from the tagging form starts a plain keyword at the f
   assert.deepEqual(req.body, { keyword: 'beach', lat: 1, lon: 2, alt: 3 });
 });
 
-test('Clear removes the Location, and the keyword moves back to the plain pills', async () => {
+test('Clear removes the Location, and the keyword is suggested as a plain one again', async () => {
   const { elements, fetchMock } = await startSessionWithKeywords([CONCERT]);
   click(elements['manage-keywords-tag-button']);
   await flushMicrotasks();
@@ -467,8 +479,8 @@ test('Clear removes the Location, and the keyword moves back to the plain pills'
   assert.equal(elements['manage-location-editor'].open, false);
   assert.match(elements['manage-keywords-list'].innerHTML, /concert[\s\S]*no location/);
   click(elements['manage-back-button']);
-  assert.match(elements['keyword-pills'].innerHTML, /data-keyword="concert">concert</);
-  assert.doesNotMatch(elements['located-keyword-pills'].innerHTML, /concert/);
+  openKeywordSuggestions(elements);
+  assert.match(elements['keyword-suggestions'].innerHTML, /data-keyword="concert">concert</);
 });
 
 test('Cancel closes the editor without a request; editing another keyword switches the editor to it', async () => {

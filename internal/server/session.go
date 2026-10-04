@@ -125,7 +125,7 @@ type Session struct {
 // photo's existing DateTimeOriginal to establish queue order (see
 // internal/queue), classifying each as Tagged/Non-Tagged by filename, and
 // seeding kws with every keyword already embedded in the directory's photos
-// so the quick-pick pills aren't limited to keywords Applied via this tool.
+// so the keyword suggestions aren't limited to keywords Applied via this tool.
 // The run's actual queue isn't built yet -- that happens once the start
 // screen's Mode choice reaches Start().
 func NewSession(
@@ -658,7 +658,8 @@ func (s *Session) LookupElevation(lat, lon float64) (float64, error) {
 }
 
 // Keywords returns every known keyword and its optional saved Location, for
-// the tagging UI's pills and the manage-keywords view (see web/static/app.js).
+// the tagging UI's keyword suggestions and the manage-keywords view (see
+// web/static/app.js).
 func (s *Session) Keywords() []keywords.Keyword {
 	return s.keywords.All()
 }
@@ -675,7 +676,7 @@ func (s *Session) ClearKeywordLocation(kw string) error {
 	return s.keywords.SetLocation(kw, nil)
 }
 
-// DeleteKeyword removes kw from the known-keywords pill list and strips it
+// DeleteKeyword removes kw from the known-keywords list and strips it
 // from every photo currently in the source directory that carries it. It
 // re-scans the directory rather than walking allEntries/entries: a photo
 // Applied earlier this run has already been renamed on disk, so allEntries'

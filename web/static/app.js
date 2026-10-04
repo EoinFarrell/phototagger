@@ -7,6 +7,13 @@ let previousData = {};
 // renamed file (the Apply payload's locatedKeyword). Cleared by moving the
 // pin by hand, not by removing the keyword from the Keywords field.
 let snappedLocatedKeyword = '';
+// The current photo's keywords, in order -- what the Keywords chips show
+// and what Apply sends. Written only through setPhotoKeywords.
+let photoKeywords = [];
+// The Keywords tag input's suggestion list: whether it's open, and which
+// suggestion is highlighted (-1 for none).
+let suggestionsOpen = false;
+let suggestionIndex = -1;
 let offsetManuallyEdited = false;
 // Owns the busy flag, the Touched-field set, and the programmatic-write
 // guard (formerly `busy`, `touched`, `settingProgrammatically` here) behind
@@ -303,17 +310,17 @@ async function maybeResolveTimezone() {
 async function loadKeywords() {
   const res = await fetch('/api/keywords');
   knownKeywords = await res.json();
-  renderKeywordPills();
+  renderKeywords();
 }
 
 // Replaces knownKeywords with the server's list (as returned by every
 // keyword-changing endpoint), keeping any keyword only on the current
-// photo's field -- e.g. from an unApplied photo's existing EXIF -- which
-// the server's keywords.json doesn't know about yet.
+// photo -- e.g. from an unApplied photo's existing EXIF -- which the
+// server's keywords.json doesn't know about yet.
 function replaceKnownKeywords(list) {
   knownKeywords = list;
-  mergeKnownKeywords(parseKeywords($('keywords-input').value));
-  renderKeywordPills();
+  mergeKnownKeywords(photoKeywords);
+  renderKeywords();
 }
 
 // Sets kw's Location via POST /api/keywords/location (creating kw if it's
@@ -333,56 +340,218 @@ function findKnownKeyword(kw) {
   return knownKeywords.find((k) => k.name === kw);
 }
 
-// Pills double as a legend for what's already in the field: one already
-// present in keywords-input renders .active, and clicking it again removes
-// it from the field (toggle), keeping the pill and the field in sync.
-// Located keywords render in the Location section (they're its saved-place
-// picker), with a pin marker; plain keywords in the Keywords section.
-// Renaming/deleting a keyword and editing its Location live on the
-// manage-view instead of on the pill itself (see "Manage keywords…").
-function renderKeywordPills() {
-  const current = new Set(parseKeywords($('keywords-input').value));
-  const pill = (kw) => {
-    const active = current.has(kw.name) ? ' active' : '';
-    const esc = escapeHtml(kw.name);
-    const pin = kw.location ? '📍 ' : '';
-    return `<button type="button" class="keyword-pill${active}" data-keyword="${esc}">${pin}${esc}</button>`;
-  };
-  $('located-keyword-pills').innerHTML = knownKeywords.filter((kw) => kw.location).map(pill).join('');
-  $('keyword-pills').innerHTML = knownKeywords.filter((kw) => !kw.location).map(pill).join('');
+// ---- Keyword tag input ----
+//
+// The photo's keywords show as chips (each with a × to remove it) ahead of
+// a text entry. Clicking into the entry, typing, or ArrowDown opens a list
+// of known keywords not already on the photo, filtered by the typed text,
+// located keywords first. Keys in the entry:
+//   Enter or ,  adds the highlighted suggestion, else the typed text
+//   ArrowDown/ArrowUp move the highlight
+//   Backspace   in an empty entry removes the last chip
+//   Escape      closes the list (so Enter then adds exactly what's typed)
+// Typing highlights the first suggestion the text starts, so "eif" + Enter
+// picks "Eiffel Tower"; a mid-word match isn't highlighted. Typed text that
+// matches a known keyword in another case adds the known keyword. Renaming
+// or deleting a keyword, and editing its Location, live on the manage-view.
+
+// The entry's comma-separated parts; the last is the one being typed.
+function entryParts() {
+  return $('keyword-entry').value.split(',');
+}
+
+function entryFragment() {
+  return entryParts().pop().trim().toLowerCase();
+}
+
+function currentSuggestions() {
+  const fragment = entryFragment();
+  const onPhoto = new Set(photoKeywords);
+  const matches = knownKeywords.filter((k) => !onPhoto.has(k.name) && k.name.toLowerCase().includes(fragment));
+  return [...matches.filter((k) => k.location), ...matches.filter((k) => !k.location)];
+}
+
+function highlightedSuggestion() {
+  if (!suggestionsOpen) return null;
+  const s = currentSuggestions()[suggestionIndex];
+  return s ? s.name : null;
+}
+
+// The pin is decorative for screen readers, which hear "located keyword".
+function keywordLabel(name) {
+  const known = findKnownKeyword(name);
+  const located = known && known.location
+    ? '<span class="keyword-pin" aria-hidden="true">📍</span><span class="visually-hidden">located keyword </span>'
+    : '';
+  return located + escapeHtml(name);
+}
+
+function renderKeywords() {
+  $('keyword-chips').innerHTML = photoKeywords.map((kw) => {
+    const esc = escapeHtml(kw);
+    return `<span class="keyword-chip">${keywordLabel(kw)}` +
+      `<button type="button" class="keyword-chip-remove" data-keyword="${esc}" aria-label="Remove ${esc}">×</button></span>`;
+  }).join('');
+
+  const suggestions = currentSuggestions();
+  if (suggestionIndex >= suggestions.length) suggestionIndex = suggestions.length - 1;
+  const show = suggestionsOpen && suggestions.length > 0;
+  $('keyword-suggestions').innerHTML = suggestions.map((k, i) => {
+    const active = i === suggestionIndex;
+    return `<li role="option" id="keyword-option-${i}" class="keyword-suggestion${active ? ' active' : ''}" ` +
+      `aria-selected="${active}" data-keyword="${escapeHtml(k.name)}">${keywordLabel(k.name)}</li>`;
+  }).join('');
+  $('keyword-suggestions').hidden = !show;
+  $('keyword-entry').setAttribute('aria-expanded', String(show));
+  if (show && suggestionIndex >= 0) {
+    $('keyword-entry').setAttribute('aria-activedescendant', `keyword-option-${suggestionIndex}`);
+  } else {
+    $('keyword-entry').removeAttribute('aria-activedescendant');
+  }
+}
+
+// The one writer of photoKeywords. `touched` marks Keywords as Touched;
+// rename/delete everywhere and a new photo pass false.
+function setPhotoKeywords(list, { touched }) {
+  photoKeywords = list;
+  if (touched) formState.touch('keywords');
+  renderKeywords();
+}
+
+// Empties the entry and closes the list.
+function resetKeywordEntry() {
+  $('keyword-entry').value = '';
+  suggestionsOpen = false;
+  suggestionIndex = -1;
+}
+
+// The known keyword typed text names, ignoring case, else the text itself.
+function resolveKeyword(text) {
+  const lower = text.toLowerCase();
+  const known = knownKeywords.find((k) => k.name.toLowerCase() === lower);
+  return known ? known.name : text;
 }
 
 // Adding a located keyword also snaps the map to its Location and makes it
-// the file's name -- but only on add: clicking an already-active pill to
-// remove it leaves the map untouched, since removing a keyword says nothing
-// about where the photo actually is.
-function toggleKeyword(kw) {
-  const current = parseKeywords($('keywords-input').value);
-  const idx = current.indexOf(kw);
-  if (idx === -1) {
-    current.push(kw);
+// the file's name -- but only on add: removing one leaves the map
+// untouched, since removing a keyword says nothing about where the photo
+// actually is.
+function addKeywords(names) {
+  const added = names.map(resolveKeyword).filter((kw, i, all) => !photoKeywords.includes(kw) && all.indexOf(kw) === i);
+  if (!added.length) return;
+  added.forEach((kw) => {
     const known = findKnownKeyword(kw);
-    if (known && known.location) {
-      const loc = known.location;
-      formState.applyProgrammaticUpdate(() => setMarker(loc.lat, loc.lon));
-      formState.invalidateElevation();
-      $('altitude-input').value = loc.alt;
-      snappedLocatedKeyword = known.name;
-      offsetManuallyEdited = false;
-      formState.touch('location');
-      maybeResolveTimezone();
-    }
-  } else {
-    current.splice(idx, 1);
-  }
-  $('keywords-input').value = current.join(', ');
-  formState.touch('keywords');
-  renderKeywordPills();
+    if (!known || !known.location) return;
+    const loc = known.location;
+    formState.applyProgrammaticUpdate(() => setMarker(loc.lat, loc.lon));
+    formState.invalidateElevation();
+    $('altitude-input').value = loc.alt;
+    snappedLocatedKeyword = known.name;
+    offsetManuallyEdited = false;
+    formState.touch('location');
+    maybeResolveTimezone();
+  });
+  $('keyword-status').textContent = `Added ${added.join(', ')}`;
+  setPhotoKeywords([...photoKeywords, ...added], { touched: true });
 }
 
+function removeKeyword(kw) {
+  $('keyword-status').textContent = `Removed ${kw}`;
+  setPhotoKeywords(photoKeywords.filter((k) => k !== kw), { touched: true });
+}
+
+// Adds what's typed (comma-separated, so a pasted list adds each), with
+// the highlighted suggestion, if any, standing in for the part still being
+// typed -- what Enter, comma and Apply all do.
+function commitKeywordEntry() {
+  const parts = entryParts();
+  const picked = highlightedSuggestion();
+  if (picked !== null) parts.pop();
+  const names = parseKeywords(parts.join(','));
+  if (picked !== null) names.push(picked);
+  $('keyword-entry').value = '';
+  suggestionIndex = -1;
+  addKeywords(names);
+}
+
+// Adds a clicked suggestion, after any earlier comma-separated parts.
+function pickSuggestion(name) {
+  const parts = entryParts();
+  parts.pop();
+  $('keyword-entry').value = '';
+  suggestionIndex = -1;
+  addKeywords([...parseKeywords(parts.join(',')), name]);
+}
+
+function openSuggestions() {
+  suggestionsOpen = true;
+  renderKeywords();
+}
+
+$('keyword-entry').addEventListener('click', formState.guardedField(openSuggestions));
+$('keyword-entry').addEventListener('blur', () => {
+  suggestionsOpen = false;
+  suggestionIndex = -1;
+  renderKeywords();
+});
+
+$('keyword-entry').addEventListener('input', formState.guardedField(() => {
+  suggestionsOpen = true;
+  const fragment = entryFragment();
+  suggestionIndex = fragment === ''
+    ? -1
+    : currentSuggestions().findIndex((k) => k.name.toLowerCase().startsWith(fragment));
+  renderKeywords();
+}));
+
+$('keyword-entry').addEventListener('keydown', formState.guardedField((e) => {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const count = currentSuggestions().length;
+    suggestionsOpen = true;
+    suggestionIndex = e.key === 'ArrowDown'
+      ? Math.min(suggestionIndex + 1, count - 1)
+      : Math.max(suggestionIndex - 1, 0);
+    renderKeywords();
+  } else if (e.key === 'Enter' || e.key === ',') {
+    e.preventDefault();
+    commitKeywordEntry();
+    renderKeywords();
+  } else if (e.key === 'Backspace' && $('keyword-entry').value === '' && photoKeywords.length) {
+    e.preventDefault();
+    removeKeyword(photoKeywords[photoKeywords.length - 1]);
+  } else if (e.key === 'Escape') {
+    suggestionsOpen = false;
+    suggestionIndex = -1;
+    renderKeywords();
+  }
+}));
+
+// Keeps focus in the entry while a suggestion is clicked (a blur would
+// close the list before the click lands).
+$('keyword-suggestions').addEventListener('mousedown', (e) => e.preventDefault());
+$('keyword-suggestions').addEventListener('click', formState.guarded((e) => {
+  const opt = e.target.closest('.keyword-suggestion');
+  if (opt) pickSuggestion(opt.dataset.keyword);
+}));
+
+// Re-rendering the chips destroys the focused × button, so focus moves to
+// the entry rather than falling back to the page.
+$('keyword-chips').addEventListener('click', formState.guarded((e) => {
+  const btn = e.target.closest('.keyword-chip-remove');
+  if (!btn) return;
+  removeKeyword(btn.dataset.keyword);
+  $('keyword-entry').focus();
+}));
+
+// Clicking the field's empty space focuses the entry, as in a real input.
+$('keyword-field').addEventListener('click', (e) => {
+  if (e.target === $('keyword-field')) $('keyword-entry').focus();
+});
+
 // Optimistic local mirror of the server's keywords.json (updated on Apply,
-// see internal/server/session.go's Apply) -- keeps a keyword typed this
-// session showing up as a pill immediately, without a round trip. A
+// see internal/server/session.go's Apply) -- keeps a keyword Applied this
+// session among the suggestions immediately, without a round trip. A
 // keyword merged in this way never carries a Location -- that's only ever
 // set through POST /api/keywords/location.
 function mergeKnownKeywords(kws) {
@@ -393,7 +562,7 @@ function mergeKnownKeywords(kws) {
       changed = true;
     }
   });
-  if (changed) renderKeywordPills();
+  if (changed) renderKeywords();
 }
 
 // Deletes kw from the known-keywords list and strips it from every photo in
@@ -433,11 +602,9 @@ function dropKnownKeyword(kw) {
   // current field without marking keywords touched -- this isn't the user
   // editing this photo's keywords, just the display catching up.
   formState.applyProgrammaticUpdate(() => {
-    const remaining = parseKeywords($('keywords-input').value).filter((k) => k !== kw);
-    $('keywords-input').value = remaining.join(', ');
+    setPhotoKeywords(photoKeywords.filter((k) => k !== kw), { touched: false });
   });
   if (editingKeyword === kw) closeLocationEditor();
-  renderKeywordPills();
   renderManageKeywordsList();
 }
 
@@ -468,31 +635,17 @@ function renameKeyword(kw) {
 }
 
 function applyRenameLocally(kw, newName, renamed) {
-  // If the field being edited still has the old name queued (not yet
-  // Applied), carry the rename into it too, rather than leaving a now-
-  // nonexistent keyword sitting in the current photo's field. Done before
-  // replaceKnownKeywords, which would otherwise merge the old name back in.
+  // If the current photo still has the old name queued (not yet Applied),
+  // carry the rename onto it too, rather than leaving a now-nonexistent
+  // keyword on it. Done before replaceKnownKeywords, which would otherwise
+  // merge the old name back in.
   formState.applyProgrammaticUpdate(() => {
-    const current = parseKeywords($('keywords-input').value);
-    const idx = current.indexOf(kw);
-    if (idx !== -1) {
-      current[idx] = newName;
-      $('keywords-input').value = current.join(', ');
-    }
+    setPhotoKeywords(photoKeywords.map((k) => (k === kw ? newName : k)), { touched: false });
   });
   replaceKnownKeywords(renamed);
   if (editingKeyword === kw) closeLocationEditor();
   renderManageKeywordsList();
 }
-
-// Both pill groups toggle the same way; only where they render differs.
-function onPillClick(e) {
-  const btn = e.target.closest('.keyword-pill');
-  if (!btn) return;
-  toggleKeyword(btn.dataset.keyword);
-}
-$('keyword-pills').addEventListener('click', formState.guardedField(onPillClick));
-$('located-keyword-pills').addEventListener('click', formState.guardedField(onPillClick));
 
 // The name row is rarely needed, so it stays collapsed behind a small
 // toggle until asked for, and collapses again after a save or on the next
@@ -538,9 +691,9 @@ $('save-located-keyword-button').addEventListener('click', formState.guarded(asy
 // Renders a row per known keyword in the manage-view: its name and a
 // Rename/Delete pair. Kept as its own full-page view (reached via "Manage
 // keywords…" from the start screen or the tagging form) rather than inline
-// per-pill controls, since deleting or renaming a keyword acts on every
+// controls on each chip, since deleting or renaming a keyword acts on every
 // photo in the folder, not just the one on screen -- worth a deliberate
-// destination rather than a stray click on a quick-pick pill.
+// destination rather than a stray click in the tagging form.
 function formatLocation(loc) {
   return loc ? `📍 ${loc.lat.toFixed(4)}, ${loc.lon.toFixed(4)}` : 'no location';
 }
@@ -729,11 +882,6 @@ $('altitude-input').addEventListener('input', formState.guardedField(() => {
   formState.touch('location');
 }));
 
-$('keywords-input').addEventListener('input', formState.guardedField(() => {
-  formState.touch('keywords');
-  renderKeywordPills();
-}));
-
 $('caption-input').addEventListener('input', formState.guardedField(() => {
   formState.touch('caption');
 }));
@@ -751,13 +899,9 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
         $('altitude-input').value = prev.alt ?? '';
         snappedLocatedKeyword = prev.locatedKeyword || '';
         // Location and its located keyword travel together: carry the
-        // keyword across too, unless it's already in the field.
-        const kws = parseKeywords($('keywords-input').value);
-        if (snappedLocatedKeyword && !kws.includes(snappedLocatedKeyword)) {
-          kws.push(snappedLocatedKeyword);
-          $('keywords-input').value = kws.join(', ');
-          formState.touch('keywords');
-          renderKeywordPills();
+        // keyword across too, unless the photo already has it.
+        if (snappedLocatedKeyword && !photoKeywords.includes(snappedLocatedKeyword)) {
+          setPhotoKeywords([...photoKeywords, snappedLocatedKeyword], { touched: true });
         }
       } else if (group === 'dateTime') {
         $('datetime-input').value = prev.dateTime || '';
@@ -765,8 +909,8 @@ document.querySelectorAll('.same-as-prev').forEach((btn) => {
         setOffsetRequired(false);
         offsetManuallyEdited = true; // trust the copied offset; don't recompute over it
       } else if (group === 'keywords') {
-        $('keywords-input').value = (prev.keywords || []).join(', ');
-        renderKeywordPills();
+        resetKeywordEntry();
+        setPhotoKeywords([...(prev.keywords || [])], { touched: false }); // touched below
       } else if (group === 'caption') {
         $('caption-input').value = prev.caption || '';
       }
@@ -847,11 +991,11 @@ function renderCurrent(data) {
       clearMarker();
     }
     $('altitude-input').value = ex.alt ?? '';
-    $('keywords-input').value = (ex.keywords || []).join(', ');
     $('caption-input').value = ex.caption || '';
   });
+  resetKeywordEntry();
   mergeKnownKeywords(ex.keywords || []);
-  renderKeywordPills();
+  setPhotoKeywords([...(ex.keywords || [])], { touched: false });
 
   document.querySelectorAll('.same-as-prev').forEach((btn) => {
     btn.disabled = !previousData[btn.dataset.group];
@@ -881,7 +1025,7 @@ function buildApplyPayload() {
     alt: altVal === '' ? null : parseFloat(altVal),
     locationTouched: formState.isTouched('location'),
     locatedKeyword: snappedLocatedKeyword,
-    keywords: parseKeywords($('keywords-input').value),
+    keywords: photoKeywords,
     keywordsTouched: formState.isTouched('keywords'),
     caption: $('caption-input').value,
     captionTouched: formState.isTouched('caption'),
@@ -920,6 +1064,8 @@ function doPrev() {
 }
 
 function doApply() {
+  // Text typed in the keyword entry but not yet added still counts.
+  if (!formState.isBusy() && $('keyword-entry').value.trim() !== '') commitKeywordEntry();
   const payload = buildApplyPayload();
   if (payload.keywordsTouched) mergeKnownKeywords(payload.keywords);
   return runNavigation('apply', () => fetch('/api/photo/apply', {

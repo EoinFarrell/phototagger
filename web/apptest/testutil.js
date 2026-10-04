@@ -41,6 +41,9 @@ class FakeElement {
   }
   get value() { return this._value; }
   set value(v) { this._value = v; }
+  setAttribute(name, value) { (this._attrs = this._attrs || {})[name] = String(value); }
+  getAttribute(name) { return this._attrs && name in this._attrs ? this._attrs[name] : null; }
+  removeAttribute(name) { if (this._attrs) delete this._attrs[name]; }
   // <dialog> methods, for the manage-view's location editor.
   showModal() { this.open = true; }
   close() { this.open = false; }
@@ -54,7 +57,7 @@ class FakeElement {
   // Minimal stand-in for Element.closest -- this fake DOM never parses
   // innerHTML into real child nodes, so it only ever matches itself. That's
   // enough to drive app.js's event-delegated click target (see
-  // clickKeywordPill below), which is always the delegation target itself.
+  // pickKeyword below), which is always the delegation target itself.
   closest(selector) {
     return this.classList.contains(selector.replace(/^\./, '')) ? this : null;
   }
@@ -83,7 +86,6 @@ const ELEMENT_META = {
   'manage-location-save-button': ['BUTTON'],
   'manage-location-clear-button': ['BUTTON'],
   'manage-location-cancel-button': ['BUTTON'],
-  'located-keyword-pills': [],
   'save-located-keyword-toggle': ['BUTTON'],
   'save-located-keyword-row': [],
   'save-located-keyword-button': ['BUTTON'],
@@ -91,8 +93,9 @@ const ELEMENT_META = {
   'datetime-input': ['INPUT', 'datetime-local'],
   'offset-input': ['INPUT', 'text'],
   'altitude-input': ['INPUT', 'number'],
-  'keywords-input': ['INPUT', 'text'],
-  'keyword-pills': [],
+  'keyword-field': [], 'keyword-chips': [], 'keyword-status': [],
+  'keyword-entry': ['INPUT', 'text'],
+  'keyword-suggestions': [],
   'caption-input': ['TEXTAREA'],
   'additional-details': [], 'additional-required-badge': [],
   'tag-progress': [], 'tag-progress-bar': ['PROGRESS'], 'tag-relpath': [], 'preview-img': [],
@@ -292,21 +295,73 @@ function click(el) {
   el.dispatchEvent({ type: 'click', target: el });
 }
 
-// Simulates clicking a specific rendered keyword pill. app.js renders pills
-// into #keyword-pills' innerHTML (a plain string in this fake DOM, with no
-// real child elements to query), so this builds a stand-in target carrying
-// just what the delegated click handler reads off it -- the .keyword-pill
-// class and data-keyword -- and dispatches through the container exactly as
-// a real nested click would bubble.
-function clickKeywordPill(elements, keyword) {
-  const pill = new FakeElement(`keyword-pill-${keyword}`, 'BUTTON');
-  pill.classList.add('keyword-pill');
-  pill.dataset.keyword = keyword;
-  elements['keyword-pills'].dispatchEvent({ type: 'click', target: pill });
+// ---- Keyword tag input (issue #16) ----
+// Chips and suggestions render through innerHTML (a plain string in this
+// fake DOM), so these read them back with a regex, and clicks on them go
+// through a stand-in target dispatched to the delegating container, the
+// same way a real nested click would bubble.
+
+function unescapeHtml(s) {
+  return s.replace(/&(amp|lt|gt|quot|#39);/g, (m, e) => ({ amp: '&', lt: '<', gt: '>', quot: '"', '#39': "'" }[e]));
+}
+
+// The photo's keywords, in order, as the rendered chips show them.
+function chipKeywords(elements) {
+  return [...elements['keyword-chips'].innerHTML.matchAll(/class="keyword-chip-remove" data-keyword="([^"]*)"/g)]
+    .map((m) => unescapeHtml(m[1]));
+}
+
+// The suggestion list's keywords, in order (empty while it's hidden).
+function suggestionKeywords(elements) {
+  if (elements['keyword-suggestions'].hidden) return [];
+  return [...elements['keyword-suggestions'].innerHTML.matchAll(/class="keyword-suggestion[^"]*"[^>]*data-keyword="([^"]*)"/g)]
+    .map((m) => unescapeHtml(m[1]));
+}
+
+// The highlighted suggestion's keyword, or null.
+function activeSuggestion(elements) {
+  const m = elements['keyword-suggestions'].innerHTML.match(/class="keyword-suggestion active"[^>]*data-keyword="([^"]*)"/);
+  return m ? unescapeHtml(m[1]) : null;
+}
+
+// Clicks into the entry, which opens the suggestion list.
+function openKeywordSuggestions(elements) {
+  const el = elements['keyword-entry'];
+  el.dispatchEvent({ type: 'click', target: el });
+}
+
+function typeInKeywordEntry(elements, text) {
+  const el = elements['keyword-entry'];
+  el.value = text;
+  el.dispatchEvent({ type: 'input', target: el });
+}
+
+function pressInKeywordEntry(elements, key) {
+  const el = elements['keyword-entry'];
+  let defaultPrevented = false;
+  el.dispatchEvent({ type: 'keydown', key, target: el, preventDefault: () => { defaultPrevented = true; } });
+  return { defaultPrevented };
+}
+
+// Opens the suggestion list and clicks kw in it.
+function pickKeyword(elements, kw) {
+  openKeywordSuggestions(elements);
+  const opt = new FakeElement(`keyword-suggestion-${kw}`, 'LI');
+  opt.classList.add('keyword-suggestion');
+  opt.dataset.keyword = kw;
+  elements['keyword-suggestions'].dispatchEvent({ type: 'click', target: opt });
+}
+
+// Clicks the × on kw's chip.
+function removeKeywordChip(elements, kw) {
+  const btn = new FakeElement(`keyword-chip-remove-${kw}`, 'BUTTON');
+  btn.classList.add('keyword-chip-remove');
+  btn.dataset.keyword = kw;
+  elements['keyword-chips'].dispatchEvent({ type: 'click', target: btn });
 }
 
 // Simulates clicking a manage-view row's "Rename" button -- same
-// stand-in-target pattern as clickKeywordPill, for app.js's
+// stand-in-target pattern as pickKeyword, for app.js's
 // #manage-keywords-list delegated click handler.
 function clickManageRename(elements, keyword) {
   const btn = new FakeElement(`manage-keyword-rename-${keyword}`, 'BUTTON');
@@ -321,15 +376,6 @@ function clickManageDelete(elements, keyword) {
   btn.classList.add('manage-keyword-delete');
   btn.dataset.keyword = keyword;
   elements['manage-keywords-list'].dispatchEvent({ type: 'click', target: btn });
-}
-
-// Same as clickKeywordPill, but for a located keyword's pill, which
-// renders into the Location section's #located-keyword-pills instead.
-function clickLocatedKeywordPill(elements, keyword) {
-  const pill = new FakeElement(`located-keyword-pill-${keyword}`, 'BUTTON');
-  pill.classList.add('keyword-pill');
-  pill.dataset.keyword = keyword;
-  elements['located-keyword-pills'].dispatchEvent({ type: 'click', target: pill });
 }
 
 // Same as clickManageRename, but for a row's "Edit location" button.
@@ -412,8 +458,10 @@ async function startSessionWithKeywords(keywords, existing) {
 
 module.exports = {
   buildDom, buildFakeLeaflet, buildFetchMock, flushMicrotasks, FakeElement,
-  loadApp, loadFormStateModule, click, clickKeywordPill,
-  clickLocatedKeywordPill, clickManageEditLocation,
+  loadApp, loadFormStateModule, click,
+  chipKeywords, suggestionKeywords, activeSuggestion, openKeywordSuggestions,
+  typeInKeywordEntry, pressInKeywordEntry, pickKeyword, removeKeywordChip,
+  clickManageEditLocation,
   clickManageRename, clickManageDelete, keydown, photoResponse, startSession,
   toKeywordObjs, startSessionWithKeywords,
 };

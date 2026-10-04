@@ -28,7 +28,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  flushMicrotasks, click, clickLocatedKeywordPill, startSession, startSessionWithKeywords,
+  flushMicrotasks, click, pickKeyword, startSession, startSessionWithKeywords,
 } = require('./testutil');
 
 test('a stale elevation lookup for a superseded pin does not clobber the current altitude', async () => {
@@ -149,7 +149,7 @@ test('picking a located keyword is not clobbered by a still-pending elevation lo
   assert.ok(pinElevation);
 
   // ...then pick the located keyword before that lookup resolves.
-  clickLocatedKeywordPill(elements, 'Home');
+  pickKeyword(elements, 'Home');
   assert.equal(elements['altitude-input'].value, 150, 'the located keyword\'s own altitude should be shown immediately');
 
   // The stale pin lookup finally lands.

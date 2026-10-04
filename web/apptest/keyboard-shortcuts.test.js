@@ -75,10 +75,10 @@ test('Enter while typing in the caption field does not trigger Apply', async () 
   assert.equal(fetchMock.countPending('/api/photo/apply'), 0);
 });
 
-test('Enter while typing in the keywords field does not trigger Apply', async () => {
+test('Enter while typing in the keyword entry does not trigger Apply', async () => {
   const { elements, fetchMock, document } = await startSession();
 
-  keydown(document, 'Enter', elements['keywords-input']);
+  keydown(document, 'Enter', elements['keyword-entry']);
   await flushMicrotasks();
 
   assert.equal(fetchMock.countPending('/api/photo/apply'), 0);
@@ -87,7 +87,7 @@ test('Enter while typing in the keywords field does not trigger Apply', async ()
 test('ArrowRight/ArrowLeft while focus is in a text field do not trigger Skip/Prev', async () => {
   const { elements, fetchMock, document } = await startSession();
 
-  keydown(document, 'ArrowRight', elements['keywords-input']);
+  keydown(document, 'ArrowRight', elements['keyword-entry']);
   keydown(document, 'ArrowLeft', elements['caption-input']);
   keydown(document, 'ArrowRight', elements['datetime-input']);
   await flushMicrotasks();

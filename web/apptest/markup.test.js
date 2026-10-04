@@ -92,3 +92,13 @@ test('the shared confirm/rename dialog is a <dialog>, and the tagging error bann
   assert.match(html, /<dialog id="ask-dialog"/);
   assert.match(html, /id="tag-error"[^>]*role="alert"|role="alert"[^>]*id="tag-error"/);
 });
+
+test('the keyword tag input is a combobox wired to its suggestion listbox, replacing the old field and pills', () => {
+  assert.match(html, /<input[^>]*id="keyword-entry"[^>]*>/);
+  const entry = html.match(/<input[^>]*id="keyword-entry"[^>]*>/)[0];
+  assert.match(entry, /role="combobox"/);
+  assert.match(entry, /aria-controls="keyword-suggestions"/);
+  assert.match(entry, /aria-expanded="false"/);
+  assert.match(html, /<ul id="keyword-suggestions" role="listbox"[^>]*hidden/);
+  assert.doesNotMatch(html, /id="keywords-input"|id="keyword-pills"|id="located-keyword-pills"/);
+});
