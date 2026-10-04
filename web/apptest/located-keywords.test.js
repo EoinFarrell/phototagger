@@ -5,7 +5,8 @@
 // and names the renamed file after it (the Apply payload's
 // locatedKeyword); removing one leaves the map alone; and "Save pin as
 // located keyword" captures the current pin under a new or existing
-// keyword via POST /api/keywords/location. Editing a located keyword's
+// keyword via POST /api/keywords/location, adding it to the photo (issue
+// #20). Editing a located keyword's
 // Location from the manage-view is covered in keyword-management.test.js.
 //
 // Run with: node --test web/apptest/located-keywords.test.js
@@ -153,9 +154,68 @@ test('"Save pin as located keyword" posts the pin and shows the new located keyw
   ]);
   await flushMicrotasks();
 
-  openKeywordSuggestions(elements);
-  assert.match(elements['keyword-suggestions'].innerHTML, /📍<\/span>[^<]*<span[^>]*>[^<]*<\/span>Pachacaid/);
+  assert.match(elements['keyword-chips'].innerHTML, /📍<\/span>[^<]*<span[^>]*>[^<]*<\/span>Pachacaid/);
   assert.equal(elements['located-keyword-name-input'].value, '');
+});
+
+test('saving the pin as a located keyword adds it to the photo and names the file after it', async () => {
+  const { elements, fetchMock, created } = await startSessionWithKeywords([], { keywords: ['beach'] });
+
+  created.maps[0]._simulateClick(43.19, 6.47);
+  fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 65 });
+  await flushMicrotasks();
+  elements['located-keyword-name-input'].value = 'Pachacaid';
+  click(elements['save-located-keyword-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords/location', [
+    { name: 'Pachacaid', location: { lat: 43.19, lon: 6.47, alt: 65 } },
+  ]);
+  await flushMicrotasks();
+
+  assert.deepEqual(chipKeywords(elements), ['beach', 'Pachacaid']);
+  assert.equal(elements['keyword-status'].textContent, 'Added Pachacaid');
+  assert.equal(created.markers[0].getLatLng().lat, 43.19, 'the pin stays put');
+  assert.equal(fetchMock.countPending('/api/elevation'), 0, 'no second elevation lookup');
+
+  const body = await applyBody(elements, fetchMock);
+  assert.deepEqual(body.keywords, ['beach', 'Pachacaid']);
+  assert.equal(body.keywordsTouched, true);
+  assert.equal(body.locatedKeyword, 'Pachacaid');
+});
+
+test('saving the pin under a name already on the photo doesn\'t add it twice', async () => {
+  const { elements, fetchMock, created } = await startSessionWithKeywords([], { keywords: ['beach'] });
+
+  created.maps[0]._simulateClick(1, 2);
+  fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 3 });
+  await flushMicrotasks();
+  elements['located-keyword-name-input'].value = 'beach';
+  click(elements['save-located-keyword-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords/location', [{ name: 'beach', location: { lat: 1, lon: 2, alt: 3 } }]);
+  await flushMicrotasks();
+
+  assert.deepEqual(chipKeywords(elements), ['beach']);
+  const body = await applyBody(elements, fetchMock);
+  assert.equal(body.locatedKeyword, 'beach');
+});
+
+test('a failed save adds nothing to the photo', async () => {
+  const { elements, fetchMock, created } = await startSessionWithKeywords([]);
+
+  created.maps[0]._simulateClick(1, 2);
+  fetchMock.resolveMatching('/api/elevation', { ok: true, alt: 3 });
+  await flushMicrotasks();
+  elements['located-keyword-name-input'].value = 'Pachacaid';
+  click(elements['save-located-keyword-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords/location', { error: 'disk full' }, { ok: false });
+  await flushMicrotasks();
+
+  assert.deepEqual(chipKeywords(elements), []);
+  const body = await applyBody(elements, fetchMock);
+  assert.equal(body.keywordsTouched, false);
+  assert.equal(body.locatedKeyword, '');
 });
 
 test('saving the pin under a plain keyword\'s name makes it a located keyword', async () => {
@@ -170,8 +230,7 @@ test('saving the pin under a plain keyword\'s name makes it a located keyword', 
   fetchMock.resolveMatching('/api/keywords/location', [{ name: 'beach', location: { lat: 1, lon: 2, alt: 3 } }]);
   await flushMicrotasks();
 
-  openKeywordSuggestions(elements);
-  assert.match(elements['keyword-suggestions'].innerHTML, /📍<\/span>[^<]*<span[^>]*>[^<]*<\/span>beach/);
+  assert.match(elements['keyword-chips'].innerHTML, /📍<\/span>[^<]*<span[^>]*>[^<]*<\/span>beach/);
 });
 
 test('saving keeps a keyword only on this photo\'s field among the known keywords', async () => {

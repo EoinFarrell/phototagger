@@ -89,6 +89,7 @@ const ELEMENT_META = {
   'save-located-keyword-toggle': ['BUTTON'],
   'save-located-keyword-row': [],
   'save-located-keyword-button': ['BUTTON'],
+  'save-located-keyword-cancel': ['BUTTON'],
   'located-keyword-name-input': ['INPUT', 'text'],
   'datetime-input': ['INPUT', 'datetime-local'],
   'offset-input': ['INPUT', 'text'],

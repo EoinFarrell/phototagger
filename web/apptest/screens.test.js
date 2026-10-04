@@ -1,7 +1,8 @@
 'use strict';
 // Covers the per-screen display added by issue #15's UI review: the start
 // screen's one-line summary, the tagging screen's progress bar and photo
-// facts, the collapsed "save pin as located keyword" row, and the Done
+// facts, the "Save as located keyword" button and the name row it swaps
+// for (issue #23), and the Done
 // screen's counts and way back to the start screen. Loads and drives the
 // real web/static/app.js (via Node's vm module against stubbed DOM/fetch).
 //
@@ -59,12 +60,13 @@ test('the photo facts say what is missing when the photo has no date, camera or 
   assert.equal(elements['photo-facts'].textContent, 'No EXIF date · No GPS');
 });
 
-test('"Save pin as keyword" reveals the name row, and a successful save collapses it again', async () => {
+test('"Save as located keyword" swaps for the name row, and a successful save swaps it back', async () => {
   const { elements, fetchMock, created } = await startSession();
   elements['save-located-keyword-row'].hidden = true; // as in index.html
 
   click(elements['save-located-keyword-toggle']);
   assert.equal(elements['save-located-keyword-row'].hidden, false);
+  assert.equal(elements['save-located-keyword-toggle'].hidden, true);
 
   created.maps[0]._simulateClick(48.8584, 2.2945);
   await flushMicrotasks();
@@ -80,9 +82,47 @@ test('"Save pin as keyword" reveals the name row, and a successful save collapse
   await flushMicrotasks();
 
   assert.equal(elements['save-located-keyword-row'].hidden, true);
+  assert.equal(elements['save-located-keyword-toggle'].hidden, false);
 });
 
-test('moving to the next photo collapses an open save-pin row', async () => {
+test('opening the name row focuses its input', async () => {
+  const { elements } = await startSession();
+  let focused = false;
+  elements['located-keyword-name-input'].focus = () => { focused = true; };
+
+  click(elements['save-located-keyword-toggle']);
+
+  assert.equal(focused, true);
+});
+
+test('Cancel swaps the name row back for the button, dropping the typed name and any error', async () => {
+  const { elements } = await startSession();
+  click(elements['save-located-keyword-toggle']);
+  elements['located-keyword-name-input'].value = 'Eiffel';
+  click(elements['save-located-keyword-button']); // no pin yet
+  await flushMicrotasks();
+  assert.equal(elements['located-keyword-error'].hidden, false);
+
+  click(elements['save-located-keyword-cancel']);
+
+  assert.equal(elements['save-located-keyword-row'].hidden, true);
+  assert.equal(elements['save-located-keyword-toggle'].hidden, false);
+  assert.equal(elements['located-keyword-name-input'].value, '');
+  assert.equal(elements['located-keyword-error'].hidden, true);
+});
+
+test('a failed save keeps the name row open with its error under it', async () => {
+  const { elements } = await startSession();
+  click(elements['save-located-keyword-toggle']);
+  click(elements['save-located-keyword-button']); // no pin yet
+  await flushMicrotasks();
+
+  assert.equal(elements['save-located-keyword-row'].hidden, false);
+  assert.equal(elements['save-located-keyword-toggle'].hidden, true);
+  assert.equal(elements['located-keyword-error'].hidden, false);
+});
+
+test('moving to the next photo swaps an open name row back for the button', async () => {
   const { elements, fetchMock } = await startSession();
   elements['save-located-keyword-row'].hidden = true;
   click(elements['save-located-keyword-toggle']);
@@ -93,6 +133,7 @@ test('moving to the next photo collapses an open save-pin row', async () => {
   await flushMicrotasks();
 
   assert.equal(elements['save-located-keyword-row'].hidden, true);
+  assert.equal(elements['save-located-keyword-toggle'].hidden, false);
 });
 
 async function skipToDone(app, applied) {

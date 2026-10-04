@@ -83,14 +83,14 @@ test('moving to the next photo clears the located-keyword row\'s message', async
   assert.equal(elements['located-keyword-error'].hidden, true);
 });
 
-test('collapsing and reopening the located-keyword row clears its message', async () => {
+test('cancelling and reopening the located-keyword row clears its message', async () => {
   const { elements } = await startSession();
   elements['save-located-keyword-row'].hidden = true;
   click(elements['save-located-keyword-toggle']);
   click(elements['save-located-keyword-button']); // no pin yet
   await flushMicrotasks();
 
-  click(elements['save-located-keyword-toggle']);
+  click(elements['save-located-keyword-cancel']);
   click(elements['save-located-keyword-toggle']);
   assert.equal(elements['located-keyword-error'].hidden, true);
 });

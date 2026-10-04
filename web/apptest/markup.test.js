@@ -67,9 +67,12 @@ test('both start-screen buttons are type="button", with Manage keywords secondar
   assert.match(buttonTag('manage-keywords-start-button').tag, /type="button"[^>]*class="secondary"|class="secondary"[^>]*type="button"/);
 });
 
-test('the save-pin name row starts collapsed behind its toggle', () => {
+test('the save-pin name row starts hidden, behind a button under the map rather than in the legend', () => {
   assert.match(html, /<div id="save-located-keyword-row"[^>]*hidden/);
-  buttonTag('save-located-keyword-toggle');
+  assert.match(html, /<div id="map"><\/div>\s*<button[^>]*id="save-located-keyword-toggle"/);
+  const legend = html.match(/<fieldset data-group="location">\s*<legend>[\s\S]*?<\/legend>/)[0];
+  assert.doesNotMatch(legend, /save-located-keyword-toggle/);
+  assert.match(buttonTag('save-located-keyword-cancel').tag, /type="button"/);
 });
 
 test('the keyword location editor is a <dialog>', () => {

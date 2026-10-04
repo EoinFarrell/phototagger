@@ -232,11 +232,12 @@ legend {
   margin: 0.5rem 0;
 }
 
+/* The toggle and the name row take turns in the same spot under the map. */
 #save-located-keyword-row {
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.5rem;
 }
+#save-located-keyword-row[hidden] { display: none; }
 #save-located-keyword-row input { margin: 0; }
 
 /* The tag input: chips and the entry share one input-like box. */

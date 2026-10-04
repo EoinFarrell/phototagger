@@ -60,12 +60,13 @@
       <fieldset data-group="location">
         <legend>Location
           <button type="button" class="same-as-prev" data-group="location" title="Same as last (location)" aria-label="Same as last (location)">↩ Same as last</button>
-          <button type="button" id="save-located-keyword-toggle" class="outline secondary small legend-end">📍 Save as located keyword…</button>
         </legend>
         <div id="map"></div>
+        <button type="button" id="save-located-keyword-toggle" class="outline secondary small">📍 Save as located keyword…</button>
         <div id="save-located-keyword-row" hidden>
           <input type="text" id="located-keyword-name-input" placeholder="Keyword for this place…" aria-label="Located keyword name">
           <button type="button" id="save-located-keyword-button" class="small">Save</button>
+          <button type="button" id="save-located-keyword-cancel" class="secondary outline small">Cancel</button>
         </div>
         <p id="located-keyword-error" class="field-error" role="alert" hidden></p>
       </fieldset>

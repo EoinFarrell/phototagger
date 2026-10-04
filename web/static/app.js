@@ -647,15 +647,28 @@ function applyRenameLocally(kw, newName, renamed) {
   renderManageKeywordsList();
 }
 
-// The name row is rarely needed, so it stays collapsed behind a small
-// toggle until asked for, and collapses again after a save or on the next
-// photo.
-$('save-located-keyword-toggle').addEventListener('click', () => {
-  const row = $('save-located-keyword-row');
-  row.hidden = !row.hidden;
+// The name row is rarely needed, so it stays behind a button under the map
+// and takes that button's place while open -- only one of the two shows at
+// a time. A save, Cancel or the next photo swap the button back.
+function openSaveLocatedKeywordRow() {
+  $('save-located-keyword-toggle').hidden = true;
+  $('save-located-keyword-row').hidden = false;
   clearMessage('located-keyword-error');
-  if (!row.hidden) $('located-keyword-name-input').focus();
-});
+  $('located-keyword-name-input').focus();
+}
+
+function closeSaveLocatedKeywordRow({ refocus = true } = {}) {
+  const wasOpen = !$('save-located-keyword-row').hidden;
+  $('save-located-keyword-row').hidden = true;
+  $('save-located-keyword-toggle').hidden = false;
+  $('located-keyword-name-input').value = '';
+  clearMessage('located-keyword-error');
+  // The focused Save/Cancel button just disappeared.
+  if (wasOpen && refocus) $('save-located-keyword-toggle').focus();
+}
+
+$('save-located-keyword-toggle').addEventListener('click', openSaveLocatedKeywordRow);
+$('save-located-keyword-cancel').addEventListener('click', () => closeSaveLocatedKeywordRow());
 
 // "Save pin as located keyword": captures the current pin (and altitude)
 // as a keyword's Location -- creating the keyword if it's new, or
@@ -681,9 +694,15 @@ $('save-located-keyword-button').addEventListener('click', formState.guarded(asy
     showMessage('located-keyword-error', error);
     return;
   }
-  clearMessage('located-keyword-error');
-  $('located-keyword-name-input').value = '';
-  $('save-located-keyword-row').hidden = true;
+  // The pin is already at the keyword's new Location, so it goes on the
+  // photo and names the file, as picking it would -- minus the map snap and
+  // elevation lookup.
+  snappedLocatedKeyword = name;
+  if (!photoKeywords.includes(name)) {
+    $('keyword-status').textContent = `Added ${name}`;
+    setPhotoKeywords([...photoKeywords, name], { touched: true });
+  }
+  closeSaveLocatedKeywordRow();
 }));
 
 // ---- Keyword management (rename/delete) ----
@@ -976,8 +995,7 @@ function renderCurrent(data) {
   previousData = data.previous || {};
   formState.invalidateElevation();
   $('additional-details').open = false;
-  $('save-located-keyword-row').hidden = true;
-  clearMessage('located-keyword-error');
+  closeSaveLocatedKeywordRow({ refocus: false });
 
   const ex = data.existing || {};
   $('photo-facts').textContent = photoFacts(ex, data.camera);
