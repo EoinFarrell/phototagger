@@ -72,12 +72,6 @@ func (f *fakeExif) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Ti
 	return out, nil
 }
 
-// ReadKeywordItemsBatch reads the same fixture as ReadKeywordsBatch: no
-// fixture here stores a comma-joined Keywords string.
-func (f *fakeExif) ReadKeywordItemsBatch(paths []string) (map[string][]string, error) {
-	return f.ReadKeywordsBatch(paths)
-}
-
 func (f *fakeExif) ReadKeywordsBatch(paths []string) (map[string][]string, error) {
 	out := make(map[string][]string, len(paths))
 	for _, p := range paths {

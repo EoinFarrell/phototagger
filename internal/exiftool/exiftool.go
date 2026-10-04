@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os/exec"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -95,21 +94,11 @@ func (c *Client) ReadDateTimeOriginalBatch(paths []string) (map[string]time.Time
 // ReadKeywordsBatch reads the existing Keywords tag for many photos in a
 // single exiftool invocation, used at startup to seed the known-keywords
 // store with whatever's already embedded in the source directory's photos
-// (see internal/keywords). The returned map contains an entry only for
-// paths that have the tag; a missing entry means it wasn't present.
+// (see internal/keywords), and to find the photos carrying a keyword. The
+// returned map contains an entry only for paths that have the tag; a
+// missing entry means it wasn't present. Keywords come back as ExifTool's
+// own list items (see parseKeywords).
 func (c *Client) ReadKeywordsBatch(paths []string) (map[string][]string, error) {
-	return c.readKeywordsBatch(paths, parseKeywords)
-}
-
-// ReadKeywordItemsBatch is ReadKeywordsBatch without the comma-splitting:
-// each photo's Keywords as ExifTool's own list items, which is what
-// -Keywords-= matches against. A comma-joined string (see
-// splitKeywordString) stays one item.
-func (c *Client) ReadKeywordItemsBatch(paths []string) (map[string][]string, error) {
-	return c.readKeywordsBatch(paths, parseKeywordItems)
-}
-
-func (c *Client) readKeywordsBatch(paths []string, parse func(json.RawMessage) ([]string, error)) (map[string][]string, error) {
 	keywords := make(map[string][]string, len(paths))
 	if len(paths) == 0 {
 		return keywords, nil
@@ -133,7 +122,7 @@ func (c *Client) readKeywordsBatch(paths []string, parse func(json.RawMessage) (
 		if len(r.Keywords) == 0 {
 			continue
 		}
-		kws, err := parse(r.Keywords)
+		kws, err := parseKeywords(r.Keywords)
 		if err != nil {
 			return nil, fmt.Errorf("parsing Keywords %q from %s: %w", r.Keywords, r.SourceFile, err)
 		}
@@ -299,7 +288,12 @@ func rawText(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func parseKeywordItems(raw json.RawMessage) ([]string, error) {
+// parseKeywords returns Keywords as ExifTool's own list items -- what
+// -Keywords-= matches, so the UI shows exactly what rename and delete act
+// on. A list written by another tool as one comma-joined string ("2019,
+// brands hatch, bike") stays one keyword rather than being split, so it
+// can be renamed or deleted as the photo actually stores it.
+func parseKeywords(raw json.RawMessage) ([]string, error) {
 	var asSlice []string
 	if err := json.Unmarshal(raw, &asSlice); err == nil {
 		return asSlice, nil
@@ -309,39 +303,6 @@ func parseKeywordItems(raw json.RawMessage) ([]string, error) {
 		return []string{asString}, nil
 	}
 	return nil, fmt.Errorf("unexpected Keywords shape: %s", raw)
-}
-
-// parseKeywords is parseKeywordItems with a single string value split on
-// commas (see splitKeywordString).
-func parseKeywords(raw json.RawMessage) ([]string, error) {
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil {
-		return splitKeywordString(asString), nil
-	}
-	return parseKeywordItems(raw)
-}
-
-// splitKeywordString splits a single Keywords value on commas, trimming
-// whitespace and dropping empties. Seen in practice: a third-party tool
-// (a race-photography vendor's watermarking software) wrote an entire
-// keyword list as one comma-joined string into what's normally a
-// multi-value tag, so exiftool reads it back as a single JSON string
-// rather than an array -- "2019, Sussex Sport Photography, revolve24,
-// brands hatch, bike, ..." as one literal keyword, instead of eleven.
-// Splitting it here matches the comma-separated convention this app's own
-// keywords field already uses everywhere else (see web/static/app.js's
-// own parseKeywords), rather than surfacing the whole blob as one tag. A
-// single-word value with no comma splits into itself unchanged.
-func splitKeywordString(s string) []string {
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // Fields holds the metadata to write for a single photo's Apply step. Every

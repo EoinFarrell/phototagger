@@ -50,7 +50,6 @@ type ExifClient interface {
 	RemoveKeywordBatch(paths []string, kw string) error
 	RenameKeywordBatch(paths []string, oldKw, newKw string) error
 	ReadKeywordsBatch(paths []string) (map[string][]string, error)
-	ReadKeywordItemsBatch(paths []string) (map[string][]string, error)
 	ReadGPSPresenceBatch(paths []string) (map[string]bool, error)
 }
 
@@ -742,11 +741,8 @@ func (s *Session) RenameKeyword(oldKw, newKw string) error {
 // photosCarrying returns the paths of the photos whose Keywords list has
 // kw as an item, read in batches like the startup reads. RenameKeyword
 // must pass only these to RenameKeywordBatch, which adds the new name to
-// every file it's given (issue #19). Items are matched the way
-// -Keywords-= matches them -- exactly, and without splitting a
-// comma-joined string -- so a photo whose old keyword is buried in such a
-// string is left alone rather than gaining the new name while keeping the
-// old.
+// every file it's given (issue #19). Items are matched exactly, the way
+// -Keywords-= matches them.
 func photosCarrying(exif ExifClient, photos []scan.Photo, kw string) ([]string, error) {
 	var paths []string
 	for start := 0; start < len(photos); start += metadataReadBatchSize {
@@ -755,7 +751,7 @@ func photosCarrying(exif ExifClient, photos []scan.Photo, kw string) ([]string, 
 		for _, p := range photos[start:end] {
 			batch = append(batch, p.Path)
 		}
-		keywords, err := exif.ReadKeywordItemsBatch(batch)
+		keywords, err := exif.ReadKeywordsBatch(batch)
 		if err != nil {
 			return nil, fmt.Errorf("reading keywords for photos %d-%d: %w", start, end, err)
 		}

@@ -129,35 +129,10 @@ func TestReadKeywordsBatch(t *testing.T) {
 	}
 }
 
-func TestSplitKeywordString(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"solo", []string{"solo"}},
-		{"2019, Sussex Sport Photography, revolve24,bike", []string{"2019", "Sussex Sport Photography", "revolve24", "bike"}},
-		{"beach,, family", []string{"beach", "family"}}, // blank segments dropped
-		{"", nil},
-	}
-	for _, c := range cases {
-		got := splitKeywordString(c.in)
-		if len(got) != len(c.want) {
-			t.Errorf("splitKeywordString(%q) = %v, want %v", c.in, got, c.want)
-			continue
-		}
-		for i := range got {
-			if got[i] != c.want[i] {
-				t.Errorf("splitKeywordString(%q) = %v, want %v", c.in, got, c.want)
-				break
-			}
-		}
-	}
-}
-
-// ReadKeywordItemsBatch reports Keywords as ExifTool's own list items --
-// what -Keywords-= matches against -- so a comma-joined string stays one
-// item rather than being split the way ReadKeywordsBatch splits it.
-func TestReadKeywordItemsBatch_KeepsACommaJoinedStringWhole(t *testing.T) {
+// A Keywords list another tool wrote as one comma-joined string is one
+// ExifTool list item -- what -Keywords-= matches -- so it stays one
+// keyword rather than being split.
+func TestReadKeywordsBatch_KeepsACommaJoinedStringWhole(t *testing.T) {
 	json := `[
 		{"SourceFile":"a.jpg","Keywords":["beach","family"]},
 		{"SourceFile":"b.jpg","Keywords":"2019, beach, bike"},
@@ -166,7 +141,7 @@ func TestReadKeywordItemsBatch_KeepsACommaJoinedStringWhole(t *testing.T) {
 	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
 	c := NewWithRunner(r)
 
-	items, err := c.ReadKeywordItemsBatch([]string{"a.jpg", "b.jpg", "c.jpg"})
+	items, err := c.ReadKeywordsBatch([]string{"a.jpg", "b.jpg", "c.jpg"})
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
@@ -372,13 +347,12 @@ func TestReadExisting_SingleKeywordAsString(t *testing.T) {
 	}
 }
 
-// TestReadExisting_CommaJoinedKeywordStringSplits guards against a real
-// case: a photo whose Keywords tag was written by another tool as one
-// comma-joined string instead of a proper multi-value list. exiftool
-// returns that as a single JSON string, which must still split into
-// separate keywords -- matching the comma-separated convention this app's
-// own keywords field already uses -- rather than becoming one giant tag.
-func TestReadExisting_CommaJoinedKeywordStringSplits(t *testing.T) {
+// TestReadExisting_CommaJoinedKeywordStringStaysWhole: a photo whose
+// Keywords tag was written by another tool as one comma-joined string
+// comes back from exiftool as a single JSON string. It stays one keyword,
+// matching what the photo stores, so rename and delete (exact
+// -Keywords-= matches) act on what the UI shows.
+func TestReadExisting_CommaJoinedKeywordStringStaysWhole(t *testing.T) {
 	json := `[{"SourceFile":"photo.jpg","Keywords":"2019, Sussex Sport Photography, revolve24, brands hatch, bike"}]`
 	r := &fakeRunner{outputs: [][]byte{[]byte(json)}}
 	c := NewWithRunner(r)
@@ -387,7 +361,7 @@ func TestReadExisting_CommaJoinedKeywordStringSplits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	want := []string{"2019", "Sussex Sport Photography", "revolve24", "brands hatch", "bike"}
+	want := []string{"2019, Sussex Sport Photography, revolve24, brands hatch, bike"}
 	if !reflect.DeepEqual(e.Keywords, want) {
 		t.Errorf("Keywords = %v, want %v", e.Keywords, want)
 	}
