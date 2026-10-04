@@ -93,6 +93,7 @@ function createFormState() {
 
   function touch(group) { touched[group] = true; }
   function isTouched(group) { return touched[group]; }
+  function isAnyTouched() { return Object.values(touched).some(Boolean); }
   function resetTouched() { touched = freshTouched(); }
 
   // Called by a caller that's setting the altitude field's meaning itself
@@ -122,6 +123,6 @@ function createFormState() {
 
   return {
     isBusy, setBusy, applyProgrammaticUpdate, guarded, guardedField,
-    touch, isTouched, resetTouched, invalidateElevation, requestElevation,
+    touch, isTouched, isAnyTouched, resetTouched, invalidateElevation, requestElevation,
   };
 }

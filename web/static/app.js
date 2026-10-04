@@ -1108,10 +1108,34 @@ function doApply() {
   }));
 }
 
-$('done-back-button').addEventListener('click', () => {
+// Back to the start screen, with fresh counts. Starting again rebuilds
+// the queue (Session.Start) and reuses the map.
+function backToStart() {
+  clearTagError();
   switchView('start');
   loadState();
-});
+}
+
+$('done-back-button').addEventListener('click', backToStart);
+
+// Leaving mid-run drops the current photo's unApplied edits, so confirm
+// first if there are any -- including keyword text typed but not yet
+// added, which Apply would have added.
+$('tag-home-button').addEventListener('click', formState.guarded(() => {
+  if (!formState.isAnyTouched() && $('keyword-entry').value.trim() === '') {
+    backToStart();
+    return;
+  }
+  ask({
+    title: 'Leave this run?',
+    message: "Changes to this photo aren't saved.",
+    confirmLabel: 'Leave',
+    onConfirm: () => {
+      backToStart();
+      return '';
+    },
+  });
+}));
 
 $('skip-button').addEventListener('click', doSkip);
 $('prev-button').addEventListener('click', doPrev);
@@ -1143,7 +1167,8 @@ function ownsArrowKeys(el) {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (formState.isBusy() || $('tag-view').hidden) return;
+  // The dialog (e.g. "Leave this run?") owns the keyboard while it's open.
+  if (formState.isBusy() || $('tag-view').hidden || $('ask-dialog').open) return;
 
   if (e.key === 'Enter') {
     if (hasOwnEnterBehavior(e.target)) return;

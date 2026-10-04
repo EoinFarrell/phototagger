@@ -178,3 +178,101 @@ test('"Back to start" returns to the start screen with fresh counts, and startin
   assert.equal(elements['tag-view'].hidden, false);
   assert.equal(created.maps.filter((m) => m.containerId === 'map').length, 1);
 });
+
+// ---- Back to start from the tagging screen (issue #24) ----
+
+async function startAgain({ elements, fetchMock }) {
+  click(elements['start-button']);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/start', { ok: true });
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/keywords', []);
+  await flushMicrotasks();
+  fetchMock.resolveMatching('/api/photo/current', photoResponse(0));
+  await flushMicrotasks();
+}
+
+test('"← Start" with nothing Touched goes straight back with fresh counts, clearing the toast and error banner', async () => {
+  const app = await startSession();
+  const { elements, fetchMock, created } = app;
+  fetchMock.resolveMatching('/api/state', STATE); // the page-load fetch
+  await flushMicrotasks();
+  elements['tag-error'].hidden = false;
+  elements.toast.classList.add('visible');
+
+  click(elements['tag-home-button']);
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, false);
+  assert.equal(elements['start-view'].hidden, false);
+  assert.equal(elements['tag-view'].hidden, true);
+  assert.equal(elements['tag-error'].hidden, true);
+  assert.equal(elements.toast.classList.contains('visible'), false);
+  fetchMock.resolveMatching('/api/state', { ...STATE, modes: { all: 4, nonTagged: 3, tagged: 1 } });
+  await flushMicrotasks();
+  assert.equal(elements['mode-count-tagged'].textContent, 1);
+
+  await startAgain(app);
+  assert.equal(elements['tag-view'].hidden, false);
+  assert.equal(created.maps.filter((m) => m.containerId === 'map').length, 1);
+});
+
+test('"← Start" with unApplied edits asks first; Cancel stays on the photo with the edits intact', async () => {
+  const { elements } = await startSession();
+  elements['caption-input'].value = 'Sandcastles';
+  elements['caption-input'].dispatchEvent({ type: 'input', target: elements['caption-input'] });
+
+  click(elements['tag-home-button']);
+
+  assert.equal(elements['ask-dialog'].open, true);
+  assert.equal(elements['ask-title'].textContent, 'Leave this run?');
+  assert.match(elements['ask-message'].textContent, /aren't saved/);
+
+  click(elements['ask-cancel-button']);
+  assert.equal(elements['ask-dialog'].open, false);
+  assert.equal(elements['tag-view'].hidden, false);
+  assert.equal(elements['caption-input'].value, 'Sandcastles');
+});
+
+test('confirming "Leave this run?" returns to the start screen, and a new run starts clean', async () => {
+  const app = await startSession();
+  const { elements, fetchMock } = app;
+  elements['caption-input'].value = 'Sandcastles';
+  elements['caption-input'].dispatchEvent({ type: 'input', target: elements['caption-input'] });
+
+  click(elements['tag-home-button']);
+  click(elements['ask-confirm-button']);
+  await flushMicrotasks();
+
+  assert.equal(elements['ask-dialog'].open, false);
+  assert.equal(elements['start-view'].hidden, false);
+  assert.equal(elements['tag-view'].hidden, true);
+
+  await startAgain(app);
+  assert.equal(elements['caption-input'].value, '');
+  click(elements['apply-button']);
+  await flushMicrotasks();
+  const body = fetchMock.log.filter((e) => e.url.includes('/api/photo/apply')).pop().body;
+  assert.equal(body.captionTouched, false);
+});
+
+test('keyword text typed but not yet added counts as an unApplied edit', async () => {
+  const { elements } = await startSession();
+  elements['keyword-entry'].value = 'sunset';
+
+  click(elements['tag-home-button']);
+
+  assert.equal(elements['ask-dialog'].open, true);
+});
+
+test('the arrow-key shortcuts don\'t skip or go back behind the open "Leave this run?" dialog', async () => {
+  const { elements, fetchMock, document } = await startSession();
+  elements['caption-input'].value = 'x';
+  elements['caption-input'].dispatchEvent({ type: 'input', target: elements['caption-input'] });
+  click(elements['tag-home-button']);
+
+  document.dispatchEvent({ type: 'keydown', key: 'ArrowRight', target: elements['ask-confirm-button'], preventDefault() {} });
+  await flushMicrotasks();
+
+  assert.equal(fetchMock.countPending('/api/photo/skip'), 0);
+});

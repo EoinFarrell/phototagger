@@ -99,6 +99,7 @@ const ELEMENT_META = {
   'keyword-suggestions': [],
   'caption-input': ['TEXTAREA'],
   'additional-details': [], 'additional-required-badge': [],
+  'tag-home-button': ['BUTTON'],
   'tag-progress': [], 'tag-progress-bar': ['PROGRESS'], 'tag-relpath': [], 'preview-img': [],
   'photo-facts': [],
   'toast': [],

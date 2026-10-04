@@ -66,6 +66,15 @@ test('resetTouched clears every group back to untouched', () => {
   assert.equal(state.isTouched('caption'), false);
 });
 
+test('isAnyTouched is true once any group is touched, and false again after resetTouched', () => {
+  const state = newState();
+  assert.equal(state.isAnyTouched(), false);
+  state.touch('caption');
+  assert.equal(state.isAnyTouched(), true);
+  state.resetTouched();
+  assert.equal(state.isAnyTouched(), false);
+});
+
 test('guarded() runs the wrapped handler when idle, and forwards its arguments and return value', () => {
   const state = newState();
   const calls = [];
