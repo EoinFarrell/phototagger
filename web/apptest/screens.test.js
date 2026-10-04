@@ -15,8 +15,17 @@ const { flushMicrotasks, click, loadApp, startSession, photoResponse } = require
 const STATE = {
   sourceDir: '/photos', backupDir: '/photos-backup', photoCount: 4,
   extCounts: { jpg: 3, heic: 1 }, subfolderCount: 2, skipped: [],
-  modes: { all: 4, nonTagged: 4, tagged: 0 },
-  geo: { all: 4, missingGps: 2 },
+  counts: {
+    'all': { 'all': 4, 'missing-gps': 2 },
+    'non-tagged': { 'all': 4, 'missing-gps': 2 },
+    'tagged': { 'all': 0, 'missing-gps': 0 },
+  },
+};
+
+// The same STATE after one photo was Applied (renamed to Tagged).
+const STATE_AFTER_APPLY = {
+  ...STATE,
+  counts: { ...STATE.counts, 'non-tagged': { 'all': 3, 'missing-gps': 2 }, 'tagged': { 'all': 1, 'missing-gps': 0 } },
 };
 
 test('the start summary leads with photo, subfolder and type counts, then the paths', async () => {
@@ -35,6 +44,32 @@ test('the start summary uses singular nouns for a count of one', async () => {
   await flushMicrotasks();
 
   assert.match(elements['start-summary'].innerHTML, /1 photo · 1 subfolder · 1 JPG/);
+});
+
+test('skipped files sit in one collapsed section, grouped by reason with a count each', async () => {
+  const { elements, fetchMock } = loadApp();
+  fetchMock.resolveMatching('/api/state', {
+    ...STATE,
+    skipped: [
+      { ext: 'txt', files: ['a.txt', 'sub/b.txt'] },
+      { ext: '', files: ['README'] },
+    ],
+  });
+  await flushMicrotasks();
+
+  const html = elements['start-summary'].innerHTML;
+  assert.match(html, /<details id="skipped-details"><summary>3 skipped files<\/summary>/);
+  assert.match(html, /<summary>2 · Unsupported file type: \.txt<\/summary><ul class="skipped-files"><li>a\.txt<\/li><li>sub\/b\.txt<\/li>/);
+  assert.match(html, /<summary>1 · No file extension<\/summary>/);
+  assert.doesNotMatch(html, /<details[^>]* open/);
+});
+
+test('no skipped section when nothing was skipped', async () => {
+  const { elements, fetchMock } = loadApp();
+  fetchMock.resolveMatching('/api/state', STATE);
+  await flushMicrotasks();
+
+  assert.doesNotMatch(elements['start-summary'].innerHTML, /skipped/);
 });
 
 test('the progress bar and counter show the position in the queue', async () => {
@@ -162,7 +197,7 @@ test('"Back to start" returns to the start screen with fresh counts, and startin
   await flushMicrotasks();
   assert.equal(elements['start-view'].hidden, false);
   assert.equal(elements['done-view'].hidden, true);
-  fetchMock.resolveMatching('/api/state', { ...STATE, modes: { all: 4, nonTagged: 3, tagged: 1 } });
+  fetchMock.resolveMatching('/api/state', STATE_AFTER_APPLY);
   await flushMicrotasks();
   assert.equal(elements['mode-count-tagged'].textContent, 1);
 
@@ -208,7 +243,7 @@ test('"← Start" with nothing Touched goes straight back with fresh counts, cle
   assert.equal(elements['tag-view'].hidden, true);
   assert.equal(elements['tag-error'].hidden, true);
   assert.equal(elements.toast.classList.contains('visible'), false);
-  fetchMock.resolveMatching('/api/state', { ...STATE, modes: { all: 4, nonTagged: 3, tagged: 1 } });
+  fetchMock.resolveMatching('/api/state', STATE_AFTER_APPLY);
   await flushMicrotasks();
   assert.equal(elements['mode-count-tagged'].textContent, 1);
 

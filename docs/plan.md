@@ -57,10 +57,13 @@ and Non-Tagged photos in `-dir` is now the normal, expected state of a resumed b
 Before the one-at-a-time UI opens, a start screen shows a recursive scan summary of the
 source directory: total applicable-photo count broken down by extension, subfolder
 count, and an expandable list (not just a count) of skipped/non-applicable files found
-along the way, so a misplaced screenshot or `.DS_Store` is visible before you begin. It
-also offers a **Mode** choice — All / Non-Tagged / Tagged — with a count shown next to
-each option, telling the app which photos to include in this run's queue. Picking a
-Mode with zero matching photos is allowed; it just goes straight to the done state.
+along the way, grouped by reason (unsupported extension, or none) with a count per
+group, so a misplaced screenshot or `.DS_Store` is visible before you begin. It
+also offers a **Mode** choice — All / Non-Tagged / Tagged — and a Geo choice — All /
+Missing GPS — which combine (the queue holds photos matching both). Each option's count
+is the queue size it would give alongside the other choice's current selection, and the
+resulting queue size is stated under them. Picking a combination with zero matching
+photos is allowed; it just goes straight to the done state.
 
 Supported extensions: `.jpg`/`.jpeg`/`.heic`/`.heif`, case-insensitive. Anything else
 found during the recursive scan is listed in the summary but otherwise ignored.

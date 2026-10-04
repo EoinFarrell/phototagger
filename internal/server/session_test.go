@@ -215,9 +215,8 @@ func TestSession_Counts_ReflectsTaggedAndNonTagged(t *testing.T) {
 	)
 
 	got := sess.Counts()
-	want := modeCounts{All: 3, NonTagged: 1, Tagged: 2}
-	if got != want {
-		t.Errorf("Counts() = %+v, want %+v", got, want)
+	if got[queue.ModeAll][queue.GeoAll] != 3 || got[queue.ModeNonTagged][queue.GeoAll] != 1 || got[queue.ModeTagged][queue.GeoAll] != 2 {
+		t.Errorf("Counts() = %+v, want All 3, Non-Tagged 1, Tagged 2 under Geo All", got)
 	}
 }
 
@@ -251,10 +250,16 @@ func TestSession_GeoCounts_And_Start_FiltersByGeo(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	gotGeo := sess.GeoCounts()
-	wantGeo := geoCounts{All: 3, MissingGPS: 2}
-	if gotGeo != wantGeo {
-		t.Errorf("GeoCounts() = %+v, want %+v", gotGeo, wantGeo)
+	// Each count is the intersection a run with that Mode and Geo would
+	// queue, not a per-axis total.
+	gotCounts := sess.Counts()
+	wantCounts := queueCounts{
+		queue.ModeAll:       {queue.GeoAll: 3, queue.GeoMissingGPS: 2},
+		queue.ModeNonTagged: {queue.GeoAll: 2, queue.GeoMissingGPS: 2},
+		queue.ModeTagged:    {queue.GeoAll: 1, queue.GeoMissingGPS: 0},
+	}
+	if !reflect.DeepEqual(gotCounts, wantCounts) {
+		t.Errorf("Counts() = %+v, want %+v", gotCounts, wantCounts)
 	}
 
 	sess.Start(queue.ModeAll, queue.GeoMissingGPS)
@@ -697,11 +702,12 @@ func TestSession_StartAgainAfterApply_SeesTheRenamedPhoto(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := sess.Counts(); got.Tagged != 1 || got.NonTagged != 1 {
+	got := sess.Counts()
+	if got[queue.ModeTagged][queue.GeoAll] != 1 || got[queue.ModeNonTagged][queue.GeoAll] != 1 {
 		t.Errorf("Counts() = %+v, want 1 Tagged, 1 Non-Tagged", got)
 	}
-	if got := sess.GeoCounts(); got.MissingGPS != 1 {
-		t.Errorf("GeoCounts().MissingGPS = %d, want 1", got.MissingGPS)
+	if got[queue.ModeAll][queue.GeoMissingGPS] != 1 {
+		t.Errorf("Counts()[all][missing-gps] = %d, want 1", got[queue.ModeAll][queue.GeoMissingGPS])
 	}
 
 	sess.Start(queue.ModeTagged, queue.GeoAll)

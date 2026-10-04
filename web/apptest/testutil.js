@@ -73,6 +73,7 @@ const ELEMENT_META = {
   'start-view': [], 'tag-view': [], 'manage-view': [], 'done-view': [], 'start-summary': [],
   'mode-count-all': [], 'mode-count-non-tagged': [], 'mode-count-tagged': [],
   'geo-count-all': [], 'geo-count-missing-gps': [],
+  'mode-select': [], 'geo-select': [], 'start-match': [],
   'start-button': ['BUTTON'],
   'done-summary': [],
   'done-back-button': ['BUTTON'],

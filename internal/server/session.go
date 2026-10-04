@@ -179,32 +179,19 @@ func NewSession(
 	}, nil
 }
 
-// Counts reports how many scanned photos match each Mode, for the start
-// screen (see docs/plan.md's Start screen section).
-func (s *Session) Counts() modeCounts {
+// Counts reports, for every Mode and Geo filter combination, how many
+// scanned photos a run started with that pair would queue -- the same
+// Filter-then-FilterGeo intersection Start builds. The start screen shows
+// each choice's count given the other axis's current selection, so the
+// numbers always describe the queue the user is about to get.
+func (s *Session) Counts() queueCounts {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	counts := modeCounts{All: len(s.allEntries)}
-	for _, e := range s.allEntries {
-		if e.Tagged {
-			counts.Tagged++
-		}
-	}
-	counts.NonTagged = counts.All - counts.Tagged
-	return counts
-}
-
-// GeoCounts reports how many scanned photos match each Geo filter, for the
-// start screen. Independent of Mode -- counted over every scanned photo
-// regardless of which Mode is currently selected, mirroring how Mode and
-// Geo are chosen independently and ANDed together by Start.
-func (s *Session) GeoCounts() geoCounts {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	counts := geoCounts{All: len(s.allEntries)}
-	for _, e := range s.allEntries {
-		if !e.HasGPS {
-			counts.MissingGPS++
+	counts := queueCounts{}
+	for _, mode := range []queue.Mode{queue.ModeAll, queue.ModeNonTagged, queue.ModeTagged} {
+		counts[mode] = map[queue.GeoFilter]int{}
+		for _, geo := range []queue.GeoFilter{queue.GeoAll, queue.GeoMissingGPS} {
+			counts[mode][geo] = len(queue.FilterGeo(queue.Filter(s.allEntries, mode), geo))
 		}
 	}
 	return counts

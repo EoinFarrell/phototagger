@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"sort"
 
 	"phototagger/internal/keywords"
 	"phototagger/internal/queue"
+	"phototagger/internal/scan"
 )
 
 var errKeywordRequired = errors.New("keyword is required")
@@ -61,20 +63,15 @@ func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
 }
 
-// modeCounts is how many scanned photos match each Mode, shown next to the
-// start screen's Mode choice (see docs/plan.md's Start screen section).
-type modeCounts struct {
-	All       int `json:"all"`
-	NonTagged int `json:"nonTagged"`
-	Tagged    int `json:"tagged"`
-}
+// queueCounts is how many scanned photos a run would queue for each Mode
+// and Geo filter pair, keyed by their wire values -- see Session.Counts.
+type queueCounts map[queue.Mode]map[queue.GeoFilter]int
 
-// geoCounts is how many scanned photos match each Geo filter, shown next to
-// the start screen's Geo choice. Independent of modeCounts -- see
-// Session.GeoCounts.
-type geoCounts struct {
-	All        int `json:"all"`
-	MissingGPS int `json:"missingGps"`
+// skippedGroup is the skipped/non-applicable files sharing one extension
+// ("" for none), so the start screen can say why they were skipped.
+type skippedGroup struct {
+	Ext   string   `json:"ext"`
+	Files []string `json:"files"`
 }
 
 type stateResponse struct {
@@ -83,11 +80,10 @@ type stateResponse struct {
 	PhotoCount     int            `json:"photoCount"`
 	ExtCounts      map[string]int `json:"extCounts"`
 	SubfolderCount int            `json:"subfolderCount"`
-	Skipped        []string       `json:"skipped"`
+	Skipped        []skippedGroup `json:"skipped"`
 	Remaining      int            `json:"remaining"`
 	Total          int            `json:"total"`
-	Modes          modeCounts     `json:"modes"`
-	Geo            geoCounts      `json:"geo"`
+	Counts         queueCounts    `json:"counts"`
 }
 
 func handleState(sess *Session) http.HandlerFunc {
@@ -96,10 +92,7 @@ func handleState(sess *Session) http.HandlerFunc {
 		for _, p := range sess.ScanResult.Photos {
 			extCounts[p.Ext]++
 		}
-		skipped := make([]string, 0, len(sess.ScanResult.Skipped))
-		for _, s := range sess.ScanResult.Skipped {
-			skipped = append(skipped, s.RelPath)
-		}
+		skipped := groupSkipped(sess.ScanResult.Skipped)
 
 		writeJSON(w, http.StatusOK, stateResponse{
 			SourceDir:      sess.SourceDir,
@@ -110,10 +103,32 @@ func handleState(sess *Session) http.HandlerFunc {
 			Skipped:        skipped,
 			Remaining:      sess.Remaining(),
 			Total:          sess.Total(),
-			Modes:          sess.Counts(),
-			Geo:            sess.GeoCounts(),
+			Counts:         sess.Counts(),
 		})
 	}
+}
+
+// groupSkipped groups skipped files by extension, largest group first
+// (ties by extension), each group's files in scan order.
+func groupSkipped(files []scan.SkippedFile) []skippedGroup {
+	groups := []skippedGroup{}
+	index := map[string]int{}
+	for _, f := range files {
+		i, ok := index[f.Ext]
+		if !ok {
+			i = len(groups)
+			index[f.Ext] = i
+			groups = append(groups, skippedGroup{Ext: f.Ext})
+		}
+		groups[i].Files = append(groups[i].Files, f.RelPath)
+	}
+	sort.SliceStable(groups, func(i, j int) bool {
+		if len(groups[i].Files) != len(groups[j].Files) {
+			return len(groups[i].Files) > len(groups[j].Files)
+		}
+		return groups[i].Ext < groups[j].Ext
+	})
+	return groups
 }
 
 func handleStart(sess *Session) http.HandlerFunc {

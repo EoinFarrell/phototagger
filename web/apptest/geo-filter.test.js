@@ -11,19 +11,52 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { flushMicrotasks, click, loadApp } = require('./testutil');
 
-test('loadState renders the Geo counts from /api/state', async () => {
-  const { elements, fetchMock } = loadApp();
+// 5 photos: 2 Tagged (1 missing GPS), 3 Non-Tagged (all missing GPS).
+const STATE = {
+  sourceDir: '/photos', backupDir: '/photos-backup', photoCount: 5,
+  extCounts: { jpg: 5 }, subfolderCount: 0, skipped: [], remaining: 0, total: 0,
+  counts: {
+    'all': { 'all': 5, 'missing-gps': 4 },
+    'non-tagged': { 'all': 3, 'missing-gps': 3 },
+    'tagged': { 'all': 2, 'missing-gps': 1 },
+  },
+};
 
-  fetchMock.resolveMatching('/api/state', {
-    sourceDir: '/photos', backupDir: '/photos-backup', photoCount: 5,
-    extCounts: { jpg: 5 }, subfolderCount: 0, skipped: [], remaining: 0, total: 0,
-    modes: { all: 5, nonTagged: 3, tagged: 2 },
-    geo: { all: 5, missingGps: 4 },
-  });
+function counts(elements) {
+  return {
+    mode: ['non-tagged', 'tagged', 'all'].map((m) => elements[`mode-count-${m}`].textContent),
+    geo: ['all', 'missing-gps'].map((g) => elements[`geo-count-${g}`].textContent),
+    match: elements['start-match'].textContent,
+  };
+}
+
+test('each count is what the queue would hold given the other filter\'s selection', async () => {
+  const { elements, fetchMock } = loadApp();
+  fetchMock.resolveMatching('/api/state', STATE);
   await flushMicrotasks();
 
-  assert.equal(elements['geo-count-all'].textContent, 5);
-  assert.equal(elements['geo-count-missing-gps'].textContent, 4);
+  // Defaults: Mode Non-Tagged, Geo All.
+  assert.deepEqual(counts(elements), {
+    mode: [3, 2, 5], geo: [3, 3], match: 'This run will queue 3 photos.',
+  });
+});
+
+test('changing either filter recounts the other and the queue size', async () => {
+  const { elements, fetchMock, modeRadios, geoRadios } = loadApp();
+  fetchMock.resolveMatching('/api/state', STATE);
+  await flushMicrotasks();
+
+  modeRadios.forEach((r) => { r.checked = r.value === 'tagged'; });
+  elements['mode-select'].dispatchEvent({ type: 'change' });
+  assert.deepEqual(counts(elements), {
+    mode: [3, 2, 5], geo: [2, 1], match: 'This run will queue 2 photos.',
+  });
+
+  geoRadios.forEach((r) => { r.checked = r.value === 'missing-gps'; });
+  elements['geo-select'].dispatchEvent({ type: 'change' });
+  assert.deepEqual(counts(elements), {
+    mode: [3, 1, 4], geo: [2, 1], match: 'This run will queue 1 photo.',
+  });
 });
 
 test('clicking Start sends the selected Mode and Geo filter to /api/start', async () => {

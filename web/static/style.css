@@ -147,7 +147,12 @@ button kbd {
 #start-actions { display: flex; align-items: center; gap: 0.75rem; }
 #start-actions button { width: auto; margin: 0; }
 
-#skipped-list { margin-top: 0.5rem; max-height: 8rem; overflow-y: auto; font-size: 0.85em; }
+#start-match { margin: -0.5rem 0 1rem; color: var(--pico-muted-color); }
+
+#skipped-groups { margin: 0.5rem 0 0; padding-left: 0; list-style: none; }
+#skipped-groups > li { list-style: none; }
+#skipped-groups details { margin-bottom: 0.25rem; }
+.skipped-files { margin-top: 0.25rem; max-height: 8rem; overflow-y: auto; font-size: 0.85em; }
 
 /* ---- Tagging screen ---- */
 

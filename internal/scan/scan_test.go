@@ -54,6 +54,13 @@ func TestScan(t *testing.T) {
 	if len(result.Skipped) != 2 {
 		t.Fatalf("got %d skipped, want 2: %+v", len(result.Skipped), result.Skipped)
 	}
+	skippedExts := map[string]string{}
+	for _, s := range result.Skipped {
+		skippedExts[s.RelPath] = s.Ext
+	}
+	if got := skippedExts["notes.txt"]; got != "txt" {
+		t.Errorf("notes.txt skipped Ext = %q, want %q", got, "txt")
+	}
 
 	// sub and sub/deeper are both subfolders.
 	if result.SubfolderCount != 2 {

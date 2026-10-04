@@ -179,6 +179,42 @@ $('tag-error-dismiss').addEventListener('click', clearTagError);
 
 // ---- Start screen ----
 
+// Per Mode, per Geo filter: how many photos a run with that pair would
+// queue (see Session.Counts). Filled by loadState.
+let startCounts = {};
+
+function selectedRadio(name) {
+  return document.querySelector(`input[name="${name}"]:checked`).value;
+}
+
+// Mode and Geo combine (a run queues photos matching both), so each choice's
+// count is shown given the other axis's current selection -- the number on
+// a segment is exactly what the queue would hold if it were picked.
+function renderStartCounts() {
+  const count = (mode, geo) => (startCounts[mode] && startCounts[mode][geo]) || 0;
+  const mode = selectedRadio('mode');
+  const geo = selectedRadio('geo');
+  ['non-tagged', 'tagged', 'all'].forEach((m) => { $(`mode-count-${m}`).textContent = count(m, geo); });
+  ['all', 'missing-gps'].forEach((g) => { $(`geo-count-${g}`).textContent = count(mode, g); });
+  $('start-match').textContent = `This run will queue ${plural(count(mode, geo), 'photo')}.`;
+}
+
+$('mode-select').addEventListener('change', renderStartCounts);
+$('geo-select').addEventListener('change', renderStartCounts);
+
+// One collapsed section for every skipped file, with a nested, collapsed
+// group per extension (largest first, as the server sends them).
+function renderSkipped(groups) {
+  const total = groups.reduce((n, g) => n + g.files.length, 0);
+  if (!total) return '';
+  const items = groups.map((g) => {
+    const reason = g.ext ? `Unsupported file type: .${escapeHtml(g.ext)}` : 'No file extension';
+    const files = g.files.map((p) => `<li>${escapeHtml(p)}</li>`).join('');
+    return `<li><details><summary>${g.files.length} · ${reason}</summary><ul class="skipped-files">${files}</ul></details></li>`;
+  }).join('');
+  return `<details id="skipped-details"><summary>${plural(total, 'skipped file')}</summary><ul id="skipped-groups">${items}</ul></details>`;
+}
+
 async function loadState() {
   const res = await fetch('/api/state');
   const data = await res.json();
@@ -187,20 +223,11 @@ async function loadState() {
   let html = `<p id="start-counts">${plural(data.photoCount, 'photo')} · ${plural(data.subfolderCount, 'subfolder')} · ${extLine}</p>`;
   html += `<p class="start-path"><small>Source <code>${escapeHtml(data.sourceDir)}</code></small></p>`;
   html += `<p class="start-path"><small>Backup <code>${escapeHtml(data.backupDir)}</code></small></p>`;
-  if (data.skipped && data.skipped.length) {
-    html += `<details><summary>${plural(data.skipped.length, 'skipped/non-applicable file')}</summary>` +
-      `<ul id="skipped-list">${data.skipped.map((p) => `<li>${escapeHtml(p)}</li>`).join('')}</ul></details>`;
-  }
+  html += renderSkipped(data.skipped || []);
   $('start-summary').innerHTML = html;
 
-  const modes = data.modes || { all: 0, nonTagged: 0, tagged: 0 };
-  $('mode-count-all').textContent = modes.all;
-  $('mode-count-non-tagged').textContent = modes.nonTagged;
-  $('mode-count-tagged').textContent = modes.tagged;
-
-  const geo = data.geo || { all: 0, missingGps: 0 };
-  $('geo-count-all').textContent = geo.all;
-  $('geo-count-missing-gps').textContent = geo.missingGps;
+  startCounts = data.counts || {};
+  renderStartCounts();
 
   // A Mode with zero matching photos is still a valid choice -- it just
   // goes straight to the Done state -- so this only guards against there
@@ -209,8 +236,8 @@ async function loadState() {
 }
 
 $('start-button').addEventListener('click', async () => {
-  const mode = document.querySelector('input[name="mode"]:checked').value;
-  const geo = document.querySelector('input[name="geo"]:checked').value;
+  const mode = selectedRadio('mode');
+  const geo = selectedRadio('geo');
   await fetch('/api/start', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, geo }),
   });

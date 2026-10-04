@@ -9,10 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"phototagger/internal/exiftool"
 	"phototagger/internal/keywords"
+	"phototagger/internal/queue"
 	"phototagger/internal/scan"
 )
 
@@ -45,7 +47,7 @@ func TestHandleState(t *testing.T) {
 	}
 }
 
-func TestHandleState_ReportsModeCounts(t *testing.T) {
+func TestHandleState_ReportsCountsPerModeAndGeo(t *testing.T) {
 	mux := newTestMux(t)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
@@ -54,24 +56,32 @@ func TestHandleState_ReportsModeCounts(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatal(err)
 	}
-	// The fixture from newTestSession has 2 photos, both Non-Tagged.
-	if resp.Modes.All != 2 || resp.Modes.NonTagged != 2 || resp.Modes.Tagged != 0 {
-		t.Errorf("Modes = %+v, want {All:2 NonTagged:2 Tagged:0}", resp.Modes)
+	// The fixture from newTestSession has 2 photos, both Non-Tagged and
+	// neither with GPS coordinates.
+	want := queueCounts{
+		queue.ModeAll:       {queue.GeoAll: 2, queue.GeoMissingGPS: 2},
+		queue.ModeNonTagged: {queue.GeoAll: 2, queue.GeoMissingGPS: 2},
+		queue.ModeTagged:    {queue.GeoAll: 0, queue.GeoMissingGPS: 0},
+	}
+	if !reflect.DeepEqual(resp.Counts, want) {
+		t.Errorf("Counts = %+v, want %+v", resp.Counts, want)
 	}
 }
 
-func TestHandleState_ReportsGeoCounts(t *testing.T) {
-	mux := newTestMux(t)
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/state", nil))
-
-	var resp stateResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-		t.Fatal(err)
+func TestGroupSkipped_GroupsByExtensionLargestFirst(t *testing.T) {
+	got := groupSkipped([]scan.SkippedFile{
+		{RelPath: "a.txt", Ext: "txt"},
+		{RelPath: "clip.mov", Ext: "mov"},
+		{RelPath: "README", Ext: ""},
+		{RelPath: "sub/b.txt", Ext: "txt"},
+	})
+	want := []skippedGroup{
+		{Ext: "txt", Files: []string{"a.txt", "sub/b.txt"}},
+		{Ext: "", Files: []string{"README"}},
+		{Ext: "mov", Files: []string{"clip.mov"}},
 	}
-	// The fixture from newTestSession has 2 photos, neither with GPS coordinates.
-	if resp.Geo.All != 2 || resp.Geo.MissingGPS != 2 {
-		t.Errorf("Geo = %+v, want {All:2 MissingGPS:2}", resp.Geo)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("groupSkipped = %+v, want %+v", got, want)
 	}
 }
 

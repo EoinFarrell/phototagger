@@ -28,6 +28,10 @@ func (p Photo) IsHEIC() bool {
 // SkippedFile is a non-applicable file found during a scan.
 type SkippedFile struct {
 	RelPath string
+	// Ext is the lowercase extension without the leading dot ("" if the
+	// file has none) -- the reason it was skipped, since an unsupported
+	// extension is the only thing that makes a file non-applicable.
+	Ext string
 }
 
 // Result is the outcome of scanning a source directory.
@@ -80,7 +84,7 @@ func Scan(root string) (Result, error) {
 		if IsApplicableExt(ext) {
 			result.Photos = append(result.Photos, Photo{Path: path, RelPath: rel, Ext: ext})
 		} else {
-			result.Skipped = append(result.Skipped, SkippedFile{RelPath: rel})
+			result.Skipped = append(result.Skipped, SkippedFile{RelPath: rel, Ext: ext})
 		}
 		return nil
 	})
