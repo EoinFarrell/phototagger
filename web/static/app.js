@@ -160,8 +160,11 @@ $('ask-input').addEventListener('keydown', (e) => {
 $('ask-dialog').addEventListener('cancel', (e) => {
   if ($('ask-cancel-button').disabled) e.preventDefault();
 });
+// "close" fires as a later task, not inside close() itself: by then a
+// follow-up ask() (e.g. rename's photo-count confirmation) may already have
+// reopened the dialog, and that event mustn't dismiss the new question.
 $('ask-dialog').addEventListener('close', () => {
-  if (askPending) finishAsk();
+  if (askPending && !$('ask-dialog').open) finishAsk();
 });
 
 // The tagging screen's banner, for a failed Skip/Prev/Apply. Dismissible,

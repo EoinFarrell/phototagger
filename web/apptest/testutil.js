@@ -46,7 +46,12 @@ class FakeElement {
   removeAttribute(name) { if (this._attrs) delete this._attrs[name]; }
   // <dialog> methods, for the manage-view's location editor.
   showModal() { this.open = true; }
-  close() { this.open = false; }
+  // Like a real <dialog>, close() fires its "close" event as a later task,
+  // not synchronously -- by then another showModal() may have reopened it.
+  close() {
+    this.open = false;
+    setImmediate(() => this.dispatchEvent({ type: 'close', target: this }));
+  }
   focus() {}
   // Like the real HTMLElement.click(), a disabled button ignores it.
   click() { if (!this.disabled) this.dispatchEvent({ type: 'click', target: this }); }
